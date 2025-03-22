@@ -115,16 +115,22 @@ jobs:
   release:
     name: Create Release
     needs: build
-    # 仅在推送到 main 分支时触发 Release 创建
-    # if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
-      - name: Download all artifacts
+      - name: Download Artifacts
         uses: actions/download-artifact@v4
         with:
           path: artifacts
-      - name: Upload GitHub Release
+
+      - name: Organize Assets
+        run: |
+          mkdir -p release_assets
+          find artifacts -type f -exec mv {} release_assets/ \;
+          echo "Files to release:"
+          ls -lh release_assets/
+
+      - name: Publish Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
-          files: artifacts/*
+          files: release_assets/*
