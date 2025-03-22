@@ -32,6 +32,8 @@ go build -o iptest iptest.go
 
 ## 使用方法
 
+点击 [Releases](https://github.com/Kwisma/iptest/releases) 下载执行文件
+
 ### 基本命令
 
 ```bash
@@ -98,3 +100,5 @@ CSV 文件包含以下字段：
 ## 致谢
 
 代码基于[白嫖哥](https://github.com/XIU2)源码修改：https://t.me/CF_NAT/38811
+
+`delay` 添加参考: https://github.com/yutian81/IP-SpeedTest
