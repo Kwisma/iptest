@@ -4,8 +4,7 @@ data.json
 init.csv
 ip.txt
 ip_tq.csv
-ip_tq_limited.txt
-ip_tq_unlimited.txt
+ip_tq_*.txt
 locations.json
 package-lock.json
-proxyip.txt
+proxyip_*.txt
