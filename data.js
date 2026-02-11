@@ -315,7 +315,7 @@ const CONFIG = {
     Harare: "哈拉雷",
     "Addis Ababa": "亚的斯亚贝巴",
     "San Pedro Sula": "圣佩德罗苏拉",
-    Bishkek: "比什凯克"
+    Bishkek: "比什凯克",
   },
   DATA_SOURCES: [
     {

@@ -42,15 +42,15 @@ go build -o iptest iptest.go
 
 ### 参数说明
 
-|参数|默认值|说明|
-|------|------|------|
-|`-file`|`ip.txt`|IP 地址文件路径，格式为每行 `IP 端口`（例如 `1.1.1.1` `443`）。|
-|`-outfile`|`ip.csv`|输出 CSV 文件路径。|
-|`-max`|`100`|最大并发协程数。|
-|`-speedtest`|`5`|下载测速协程数量，设为 `0` 禁用测速。|
-|`-url`|`speed.cloudflare.com/__down?bytes=500000000`|测速文件地址（默认为 Cloudflare 大文件）。|
-|`-tls`|`true`|是否启用 TLS（`true` 为 HTTPS，`false` 为 HTTP）。|
-|`-delay`|`0`|延迟阈值（毫秒），超过此值的 IP 将被过滤（设为 `0` 禁用过滤）。|
+| 参数         | 默认值                                        | 说明                                                            |
+| ------------ | --------------------------------------------- | --------------------------------------------------------------- |
+| `-file`      | `ip.txt`                                      | IP 地址文件路径，格式为每行 `IP 端口`（例如 `1.1.1.1` `443`）。 |
+| `-outfile`   | `ip.csv`                                      | 输出 CSV 文件路径。                                             |
+| `-max`       | `100`                                         | 最大并发协程数。                                                |
+| `-speedtest` | `5`                                           | 下载测速协程数量，设为 `0` 禁用测速。                           |
+| `-url`       | `speed.cloudflare.com/__down?bytes=500000000` | 测速文件地址（默认为 Cloudflare 大文件）。                      |
+| `-tls`       | `true`                                        | 是否启用 TLS（`true` 为 HTTPS，`false` 为 HTTP）。              |
+| `-delay`     | `0`                                           | 延迟阈值（毫秒），超过此值的 IP 将被过滤（设为 `0` 禁用过滤）。 |
 
 ### 示例
 
@@ -176,7 +176,8 @@ node csv_hb.js init.csv ./ipfofa
 
 ## js格式化
 
-安装工具 
+安装工具
+
 ```bash
 npm install --global prettier
 ```
