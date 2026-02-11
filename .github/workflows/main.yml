@@ -1,0 +1,177 @@
+name: Build All Platforms
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Release tag (格式 v1.0.0)"
+        required: true
+        default: "v1.0.0"
+  push:
+    tags:
+      - "v*"
+permissions:
+  contents: write
+  actions: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: android
+            goarch: arm64
+          - goos: darwin
+            goarch: amd64
+          - goos: darwin
+            goarch: arm64
+          - goos: dragonfly
+            goarch: amd64
+          - goos: freebsd
+            goarch: 386
+          - goos: freebsd
+            goarch: amd64
+          - goos: freebsd
+            goarch: arm
+          - goos: freebsd
+            goarch: arm64
+          - goos: linux
+            goarch: 386
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm
+          - goos: linux
+            goarch: arm64
+          - goos: linux
+            goarch: mips
+          - goos: linux
+            goarch: mips64
+          - goos: linux
+            goarch: mips64le
+          - goos: linux
+            goarch: mipsle
+          - goos: linux
+            goarch: ppc64
+          - goos: linux
+            goarch: ppc64le
+          - goos: linux
+            goarch: riscv64
+          - goos: linux
+            goarch: s390x
+          - goos: netbsd
+            goarch: 386
+          - goos: netbsd
+            goarch: amd64
+          - goos: netbsd
+            goarch: arm
+          - goos: netbsd
+            goarch: arm64
+          - goos: openbsd
+            goarch: 386
+          - goos: openbsd
+            goarch: amd64
+          - goos: openbsd
+            goarch: arm
+          - goos: openbsd
+            goarch: arm64
+          - goos: plan9
+            goarch: 386
+          - goos: plan9
+            goarch: amd64
+          - goos: solaris
+            goarch: amd64
+          - goos: windows
+            goarch: 386
+            ext: ".exe"
+          - goos: windows
+            goarch: amd64
+            ext: ".exe"
+          - goos: windows
+            goarch: arm
+            ext: ".exe"
+          - goos: windows
+            goarch: arm64
+            ext: ".exe"
+    outputs: # 添加作业输出
+      build_time: ${{ steps.set-build-time.outputs.BUILD_TIME }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # 获取完整提交历史
+
+      - name: Setup Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: "1.20" # 根据你的需求设置Go版本
+          cache: false
+
+      - name: Create Release Assets Directory
+        run: mkdir -p "${{ github.workspace }}/release_assets"
+
+      - name: Set Build Time
+        id: set-build-time # 给步骤设置ID
+        run: |
+          build_time=$(date -u +'%Y-%m-%d %H:%M:%S UTC')
+          echo "BUILD_TIME=$build_time" >> $GITHUB_OUTPUT
+
+      - name: Build
+        run: |
+          echo "Building iptest-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext || '' }} from iptest.go..."
+          go build -o ${{ github.workspace }}/release_assets/iptest-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext || '' }} iptest.go
+        env:
+         GOARCH: ${{ matrix.goarch }}
+         GOOS: ${{ matrix.goos }} 
+
+      - name: Generate SHA256
+        run: |
+          cd "${{ github.workspace }}/release_assets"
+          for file in $(find . -type f ! -name '*.sha256'); do
+            sha256sum "$file" | awk '{print $1}' > "${file}.sha256"
+          done
+          echo "SHA256 files generated:"
+          ls -1 *.sha256
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: iptest-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext || '' }}
+          path: ${{ github.workspace }}/release_assets/*
+
+  release:
+    name: Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Move Release Assets
+        run: |
+          mkdir -p release_assets
+          find artifacts -type f ! -name "*.txt" -exec mv {} release_assets/ \;
+          echo "Files to release:"
+          ls -lh release_assets/
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.release_tag || github.ref_name }}
+          name: "Release ${{ github.event.inputs.release_tag || github.ref_name }}"
+          body: |
+            ## 多平台构建版本
+            **构建时间:** ${{ needs.build.outputs.build_time }}
+
+            完整变更日志:  
+            https://github.com/Kwisma/iptest/commits/${{ github.event.inputs.release_tag || github.ref_name }}
+          files: |
+            ${{ github.workspace }}/release_assets/*
+          draft: false
+          prerelease: ${{ contains(github.event.inputs.release_tag, '-rc') || contains(github.ref_name, '-rc') }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

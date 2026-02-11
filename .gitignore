@@ -1,0 +1,11 @@
+node_modules/
+city.json
+data.json
+init.csv
+ip.txt
+ip_tq.csv
+ip_tq_limited.txt
+ip_tq_unlimited.txt
+locations.json
+package-lock.json
+proxyip.txt
