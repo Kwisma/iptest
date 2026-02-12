@@ -35,14 +35,14 @@ else
     log "ERROR" "ip_tq.js 执行失败"
     exit 1
 fi
-log "INFO" "开始执行 ip_tq.js"
 
 # 执行 proxyip.js
-if node proxyip.js; then
-    log "INFO" "proxyip.js 执行成功"
-else
-    log "ERROR" "proxyip.js 执行失败"
-    exit 1
-fi
+# log "INFO" "开始执行 proxyip.js"
+# if node proxyip.js; then
+#     log "INFO" "proxyip.js 执行成功"
+# else
+#     log "ERROR" "proxyip.js 执行失败"
+#     exit 1
+# fi
 
 log "INFO" "所有脚本执行完毕"
