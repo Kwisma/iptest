@@ -18,7 +18,7 @@ const COLUMNS = {
   speed: "下载速度",
   datacenter: "数据中心",
   bronIpLocatie: "源IP位置",
-  outbound: "出站IP",  // 这是需要判断的列
+  outbound: "出站IP", // 这是需要判断的列
 };
 
 class CSVProcessor {
@@ -54,11 +54,15 @@ class CSVProcessor {
   }
 
   getOutboundTypeText() {
-    switch(this.config.outboundType) {
-      case 'ipv4': return '只保存IPv4';
-      case 'ipv6': return '只保存IPv6';
-      case 'all': return '保存所有类型';
-      default: return '未知配置';
+    switch (this.config.outboundType) {
+      case "ipv4":
+        return "只保存IPv4";
+      case "ipv6":
+        return "只保存IPv6";
+      case "all":
+        return "保存所有类型";
+      default:
+        return "未知配置";
     }
   }
 
@@ -95,36 +99,36 @@ class CSVProcessor {
 
   // 从可能的IP:端口#国家格式中提取纯IP
   extractPureIp(ipField) {
-    if (!ipField) return '';
-    
+    if (!ipField) return "";
+
     let pureIp = ipField.trim();
-    
+
     // 如果包含#国家，移除
-    if (pureIp.includes('#')) {
-      pureIp = pureIp.split('#')[0];
+    if (pureIp.includes("#")) {
+      pureIp = pureIp.split("#")[0];
     }
-    
+
     // 如果包含端口（最后一个冒号后面是数字），移除端口
-    if (pureIp.includes(':')) {
-      const lastColonIndex = pureIp.lastIndexOf(':');
+    if (pureIp.includes(":")) {
+      const lastColonIndex = pureIp.lastIndexOf(":");
       const afterLastColon = pureIp.substring(lastColonIndex + 1);
       if (/^\d+$/.test(afterLastColon)) {
         pureIp = pureIp.substring(0, lastColonIndex);
       }
     }
-    
+
     return pureIp;
   }
 
   shouldIncludeByOutboundType(outboundIp) {
     const pureIp = this.extractPureIp(outboundIp);
-    
-    switch(this.config.outboundType) {
-      case 'ipv4':
+
+    switch (this.config.outboundType) {
+      case "ipv4":
         return this.isIPv4(pureIp);
-      case 'ipv6':
+      case "ipv6":
         return this.isIPv6(pureIp);
-      case 'all':
+      case "all":
         return true;
       default:
         return true;
@@ -241,7 +245,7 @@ class CSVProcessor {
 
     // 速度列是可选的
     indices[COLUMNS.speed] = headers.indexOf(COLUMNS.speed);
-    
+
     // 出站IP列是可选的（用于过滤）
     indices[COLUMNS.outbound] = headers.indexOf(COLUMNS.outbound);
 
@@ -268,7 +272,10 @@ class CSVProcessor {
 
       // 获取出站IP用于类型判断
       let outboundIp = null;
-      if (indices[COLUMNS.outbound] !== -1 && indices[COLUMNS.outbound] < fields.length) {
+      if (
+        indices[COLUMNS.outbound] !== -1 &&
+        indices[COLUMNS.outbound] < fields.length
+      ) {
         outboundIp = fields[indices[COLUMNS.outbound]].trim();
       }
 
@@ -289,7 +296,7 @@ class CSVProcessor {
       } else {
         noOutboundIpCount++;
         // 如果没有出站IP，根据配置决定是否保留
-        if (this.config.outboundType !== 'all') {
+        if (this.config.outboundType !== "all") {
           filteredByOutboundType++;
           continue;
         }
@@ -324,12 +331,14 @@ class CSVProcessor {
     console.log(`  - IPv4: ${ipv4Count} 条`);
     console.log(`  - IPv6: ${ipv6Count} 条`);
     console.log(`  - 无出站IP: ${noOutboundIpCount} 条`);
-    
-    if (this.config.outboundType !== 'all') {
+
+    if (this.config.outboundType !== "all") {
       console.log(`  - 根据配置过滤: ${filteredByOutboundType} 条`);
     }
-    
-    console.log(`IP 和端口提取完成。共 ${ipEntries.length} 条记录 (已应用过滤)`);
+
+    console.log(
+      `IP 和端口提取完成。共 ${ipEntries.length} 条记录 (已应用过滤)`,
+    );
     return ipEntries;
   }
 
@@ -456,11 +465,11 @@ class CSVProcessor {
 async function main() {
   const args = process.argv.slice(2);
   const config = { ...CONFIG };
-  
+
   for (const arg of args) {
-    if (arg.startsWith('--outbound=')) {
-      const value = arg.split('=')[1];
-      if (['ipv4', 'ipv6', 'all'].includes(value)) {
+    if (arg.startsWith("--outbound=")) {
+      const value = arg.split("=")[1];
+      if (["ipv4", "ipv6", "all"].includes(value)) {
         config.outboundType = value;
         console.log(`通过命令行参数设置: 出站IP过滤模式 = ${value}`);
       }
