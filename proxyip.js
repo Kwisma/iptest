@@ -5,7 +5,7 @@ import fetch from "node-fetch";
 const INPUT_FILE = "ip_tq_unlimited.txt";
 const OUTPUT_FILE_ALL = "proxyip_all.txt"; // 所有可用代理
 const OUTPUT_FILE_TOP5 = "proxyip_top5.txt"; // 每个地区前5个
-const FILTER_STRING = ""; // 过滤指定的地区
+const FILTER_STRING = "#🇯🇵日本"; // 过滤指定的地区
 const CONCURRENCY_LIMIT = 10;
 const TIMEOUT_MS = 10000;
 const TOP5_LIMIT = 5; // 每个地区保留5个
