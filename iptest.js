@@ -547,7 +547,7 @@ const groupByCountry = (proxies) => {
 
 /**
  * 为每个国家的代理添加序号，并生成全部和指定数量两个版本
- * 只有代理数量 >= LIMIT_PER_COUNTRY 的国家才会输出
+ * 只有代理数量 >= LIMIT_PER_COUNTRY 的国家才会输出（两个版本都过滤）
  */
 const addSequentialNumbers = (validProxyObjects, limitPerCountry = 5) => {
   // 按国家分组
@@ -562,21 +562,23 @@ const addSequentialNumbers = (validProxyObjects, limitPerCountry = 5) => {
     .forEach((country) => {
       const groupProxies = groups[country];
 
-      // 全部数量 - 所有代理都带序号
-      groupProxies.forEach((proxy, index) => {
-        const sequenceNumber = index + 1;
-        const formattedProxy = `${proxy.ipPort}#${proxy.emoji}${proxy.country}${sequenceNumber}`;
-        allNumberedProxies.push(formattedProxy);
-      });
-
-      // 指定数量 - 只有该国家代理数量 >= limitPerCountry 时才输出
+      // 只有该国家代理数量 >= limitPerCountry 时才输出（全部和限制都过滤）
       if (groupProxies.length >= limitPerCountry) {
+        // 全部数量 - 所有代理都带序号
+        groupProxies.forEach((proxy, index) => {
+          const sequenceNumber = index + 1;
+          const formattedProxy = `${proxy.ipPort}#${proxy.emoji}${proxy.country}${sequenceNumber}`;
+          allNumberedProxies.push(formattedProxy);
+        });
+
+        // 指定数量 - 只取前 limitPerCountry 个
         groupProxies.slice(0, limitPerCountry).forEach((proxy, index) => {
           const sequenceNumber = index + 1;
           const formattedProxy = `${proxy.ipPort}#${proxy.emoji}${proxy.country}${sequenceNumber}`;
           limitedNumberedProxies.push(formattedProxy);
         });
       }
+      // 数量不足的国家，两个版本都不输出
     });
 
   return {
