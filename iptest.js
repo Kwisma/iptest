@@ -805,7 +805,7 @@ async function main() {
       // 1. 保存全部代理（带序号）
       await fs.writeFile(OUTPUT_ALL, allProxies.join("\n"), "utf8");
       console.log(
-        `💾 已保存: proxyip_all.txt (全部代理, ${allProxies.length}条)`,
+        `💾 已保存: ${OUTPUT_ALL} (全部代理, ${allProxies.length}条)`,
       );
 
       // 2. 保存每个国家前N个代理（带序号）
