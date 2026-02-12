@@ -13,8 +13,38 @@ const TIMEOUT_MS = 3000;
 const TCP_TIMEOUT_MS = 2000;
 const TLS_TIMEOUT_MS = 2000;
 
+// 在文件开头，imports 之后添加
+process.on('uncaughtException', (error) => {
+  // 忽略所有预期的网络错误
+  if (error.code === 'EHOSTUNREACH' || 
+      error.code === 'ECONNREFUSED' || 
+      error.code === 'ETIMEDOUT' ||
+      error.code === 'ENETUNREACH' ||
+      error.code === 'EADDRNOTAVAIL' ||
+      error.code === 'ECONNRESET' ||
+      error.code === 'EPIPE' ||
+      error.message.includes('bad record type')) {
+    // 这些是预期的错误，安静地忽略
+    return;
+  }
+  console.error('未捕获的异常:', error);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  // 忽略所有预期的网络错误
+  if (reason?.code === 'EHOSTUNREACH' || 
+      reason?.code === 'ECONNREFUSED' ||
+      reason?.code === 'ETIMEDOUT' ||
+      reason?.code === 'ENETUNREACH' ||
+      reason?.code === 'EADDRNOTAVAIL' ||
+      reason?.code === 'ECONNRESET' ||
+      reason?.code === 'ERR_SSL_BAD_RECORD_TYPE') {
+    return;
+  }
+  console.error('未处理的Promise拒绝:', reason);
+});
 /**
- * 自定义TCP/TLS连接池 - 暴力复用模式
+ * 自定义TCP/TLS连接池 - 暴力复用模式（终极修复版）
  */
 class ConnectionPool {
   constructor() {
@@ -89,47 +119,63 @@ class ConnectionPool {
   }
 
   /**
-   * 创建TCP连接
+   * 创建TCP连接 - 终极修复版
    */
   createTCPSocket(ip, port) {
     return new Promise((resolve, reject) => {
-      const socket = net.createConnection({
-        host: ip,
-        port: parseInt(port),
-        timeout: TCP_TIMEOUT_MS,
-      });
-
+      // 1. 先创建socket实例
+      const socket = new net.Socket();
+      
+      // 标记是否已经处理完成
+      let isDone = false;
+      
+      // 2. 立即设置错误处理器 - 在连接开始之前！
+      const onError = (err) => {
+        if (isDone) return;
+        isDone = true;
+        cleanup();
+        reject(new Error(`TCP连接失败: ${err.message}`));
+      };
+      
+      socket.once('error', onError);
+      
+      // 3. 设置超时
+      socket.setTimeout(TCP_TIMEOUT_MS);
+      
+      // 4. 连接成功处理器
       const onConnect = () => {
+        if (isDone) return;
+        isDone = true;
         cleanup();
         socket.setKeepAlive(true, 60000);
         socket.setNoDelay(true);
         resolve(socket);
       };
-
-      const onError = (err) => {
-        cleanup();
-        reject(new Error(`TCP连接失败: ${err.message}`));
-      };
-
+      
+      // 5. 超时处理器
       const onTimeout = () => {
+        if (isDone) return;
+        isDone = true;
         cleanup();
         reject(new Error(`TCP连接超时 (${TCP_TIMEOUT_MS}ms)`));
       };
-
+      
       const cleanup = () => {
         socket.removeListener("connect", onConnect);
         socket.removeListener("error", onError);
         socket.removeListener("timeout", onTimeout);
       };
-
+      
       socket.once("connect", onConnect);
-      socket.once("error", onError);
       socket.once("timeout", onTimeout);
+      
+      // 6. 最后才发起连接
+      socket.connect(parseInt(port), ip);
     });
   }
 
   /**
-   * 将TCP连接升级到TLS
+   * 将TCP连接升级到TLS - 完全修复版
    */
   upgradeToTLS(socket) {
     return new Promise((resolve, reject) => {
@@ -140,19 +186,31 @@ class ConnectionPool {
         timeout: TLS_TIMEOUT_MS,
       });
 
+      let isDone = false;
+
+      // 定义错误处理函数
+      const onError = (err) => {
+        if (isDone) return;
+        isDone = true;
+        cleanup();
+        reject(new Error(`TLS握手失败: ${err.message}`));
+      };
+
+      // 立即监听错误
+      tlsSocket.once('error', onError);
+
       const onSecureConnect = () => {
+        if (isDone) return;
+        isDone = true;
         cleanup();
         tlsSocket.setKeepAlive(true, 60000);
         tlsSocket.setNoDelay(true);
         resolve(tlsSocket);
       };
 
-      const onError = (err) => {
-        cleanup();
-        reject(new Error(`TLS握手失败: ${err.message}`));
-      };
-
       const onTimeout = () => {
+        if (isDone) return;
+        isDone = true;
         cleanup();
         reject(new Error(`TLS握手超时 (${TLS_TIMEOUT_MS}ms)`));
       };
@@ -164,7 +222,6 @@ class ConnectionPool {
       };
 
       tlsSocket.once("secureConnect", onSecureConnect);
-      tlsSocket.once("error", onError);
       tlsSocket.once("timeout", onTimeout);
     });
   }
@@ -679,13 +736,13 @@ async function checkProxy(proxyAddress, coloMap, ipVersion = "all") {
 
     // 超时不打印具体IP，避免刷屏
     if (error.message.includes("超时")) {
-      if (elapsed > 2000) {
+      if (elapsed > 9000) {
         console.log(`  ⏱️ ${proxyAddress.padEnd(21)} 超时 (${elapsed}ms)`);
       }
     } else {
-      console.log(
-        `  ❌ ${proxyAddress.padEnd(21)} ${error.message.substring(0, 30)} (${elapsed}ms)`,
-      );
+      //console.log(
+     //   `  ❌ ${proxyAddress.padEnd(21)} ${error.message.substring(0, 30)} (${elapsed}ms)`,
+    //  );
     }
 
     // 发生错误时也要释放连接
