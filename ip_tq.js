@@ -8,15 +8,17 @@ const CONFIG = {
   filterBySpeed: true, // 是否过滤下载速度
   minSpeed: 100, // 过滤下载速度下限，单位kb/s
   targetFile: "ip_tq.csv", // 指定要处理的CSV文件名
+  outboundType: "all", // 出站IP类型: 'ipv4' (只保存IPv4), 'ipv6' (只保存IPv6), 'all' (都保存)
 };
 
 // CSV 列名
 const COLUMNS = {
   ip: "IP地址",
-  port: "端口",
+  port: "端口号",
   speed: "下载速度",
   datacenter: "数据中心",
   bronIpLocatie: "源IP位置",
+  outbound: "出站IP",  // 这是需要判断的列
 };
 
 class CSVProcessor {
@@ -38,6 +40,7 @@ class CSVProcessor {
 
       await this.validateFileExists(csvFilePath);
       console.log(`开始处理文件: ${this.config.targetFile}`);
+      console.log(`出站IP过滤模式: ${this.getOutboundTypeText()}`);
 
       await this.loadLocations();
       await this.processCSV(
@@ -47,6 +50,15 @@ class CSVProcessor {
       );
     } catch (error) {
       this.handleError("处理文件时发生错误", error);
+    }
+  }
+
+  getOutboundTypeText() {
+    switch(this.config.outboundType) {
+      case 'ipv4': return '只保存IPv4';
+      case 'ipv6': return '只保存IPv6';
+      case 'all': return '保存所有类型';
+      default: return '未知配置';
     }
   }
 
@@ -73,12 +85,50 @@ class CSVProcessor {
     }
   }
 
-  isIPv6(ip) {
-    return ip.includes(":");
+  isIPv4(ip) {
+    return /^(\d{1,3}\.){3}\d{1,3}$/.test(ip);
   }
 
-  formatIPv6(ip) {
-    return this.isIPv6(ip) && !ip.startsWith("[") ? `[${ip}]` : ip;
+  isIPv6(ip) {
+    return ip.includes(":") && !this.isIPv4(ip);
+  }
+
+  // 从可能的IP:端口#国家格式中提取纯IP
+  extractPureIp(ipField) {
+    if (!ipField) return '';
+    
+    let pureIp = ipField.trim();
+    
+    // 如果包含#国家，移除
+    if (pureIp.includes('#')) {
+      pureIp = pureIp.split('#')[0];
+    }
+    
+    // 如果包含端口（最后一个冒号后面是数字），移除端口
+    if (pureIp.includes(':')) {
+      const lastColonIndex = pureIp.lastIndexOf(':');
+      const afterLastColon = pureIp.substring(lastColonIndex + 1);
+      if (/^\d+$/.test(afterLastColon)) {
+        pureIp = pureIp.substring(0, lastColonIndex);
+      }
+    }
+    
+    return pureIp;
+  }
+
+  shouldIncludeByOutboundType(outboundIp) {
+    const pureIp = this.extractPureIp(outboundIp);
+    
+    switch(this.config.outboundType) {
+      case 'ipv4':
+        return this.isIPv4(pureIp);
+      case 'ipv6':
+        return this.isIPv6(pureIp);
+      case 'all':
+        return true;
+      default:
+        return true;
+    }
   }
 
   getCountryFromLocationData(datacenterCode, bronIpLocatie) {
@@ -191,12 +241,19 @@ class CSVProcessor {
 
     // 速度列是可选的
     indices[COLUMNS.speed] = headers.indexOf(COLUMNS.speed);
+    
+    // 出站IP列是可选的（用于过滤）
+    indices[COLUMNS.outbound] = headers.indexOf(COLUMNS.outbound);
 
     return indices;
   }
 
   processDataLines(lines, indices) {
     const ipEntries = [];
+    let ipv4Count = 0;
+    let ipv6Count = 0;
+    let filteredByOutboundType = 0;
+    let noOutboundIpCount = 0;
 
     for (const line of lines) {
       if (!line) continue;
@@ -209,6 +266,35 @@ class CSVProcessor {
         continue; // 跳过列数不足的行
       }
 
+      // 获取出站IP用于类型判断
+      let outboundIp = null;
+      if (indices[COLUMNS.outbound] !== -1 && indices[COLUMNS.outbound] < fields.length) {
+        outboundIp = fields[indices[COLUMNS.outbound]].trim();
+      }
+
+      // 统计IP类型（使用出站IP）
+      if (outboundIp) {
+        const pureOutboundIp = this.extractPureIp(outboundIp);
+        if (this.isIPv4(pureOutboundIp)) {
+          ipv4Count++;
+        } else if (this.isIPv6(pureOutboundIp)) {
+          ipv6Count++;
+        }
+
+        // 出站IP类型过滤
+        if (!this.shouldIncludeByOutboundType(outboundIp)) {
+          filteredByOutboundType++;
+          continue;
+        }
+      } else {
+        noOutboundIpCount++;
+        // 如果没有出站IP，根据配置决定是否保留
+        if (this.config.outboundType !== 'all') {
+          filteredByOutboundType++;
+          continue;
+        }
+      }
+
       // 速度过滤
       if (
         indices[COLUMNS.speed] !== -1 &&
@@ -217,8 +303,8 @@ class CSVProcessor {
         continue;
       }
 
-      // 提取和格式化数据
-      const ip = this.formatIPv6(fields[indices[COLUMNS.ip]]);
+      // 提取IP地址和端口（用于输出）
+      const ip = fields[indices[COLUMNS.ip]].trim();
       const port = fields[indices[COLUMNS.port]];
       const datacenter = fields[indices[COLUMNS.datacenter]];
       const bronIpLocatie = fields[indices[COLUMNS.bronIpLocatie]];
@@ -234,7 +320,16 @@ class CSVProcessor {
       });
     }
 
-    console.log(`IP 和端口提取完成。共 ${ipEntries.length} 条记录`);
+    console.log(`出站IP类型统计:`);
+    console.log(`  - IPv4: ${ipv4Count} 条`);
+    console.log(`  - IPv6: ${ipv6Count} 条`);
+    console.log(`  - 无出站IP: ${noOutboundIpCount} 条`);
+    
+    if (this.config.outboundType !== 'all') {
+      console.log(`  - 根据配置过滤: ${filteredByOutboundType} 条`);
+    }
+    
+    console.log(`IP 和端口提取完成。共 ${ipEntries.length} 条记录 (已应用过滤)`);
     return ipEntries;
   }
 
@@ -252,8 +347,6 @@ class CSVProcessor {
   }
 
   filterCountriesByMinCount(groupedEntries) {
-    // 只保留记录数量 >= perCountryCount 的国家
-    // 如果 perCountryCount 为 0，则保留所有国家（至少1条）
     const minCount =
       this.config.perCountryCount > 0 ? this.config.perCountryCount : 1;
     return Object.fromEntries(
@@ -264,7 +357,6 @@ class CSVProcessor {
   }
 
   formatEntriesWithIndex(entries, startIndex = 1) {
-    // 为每个国家的IP地址添加序号
     return entries.map((entry, index) => `${entry}${startIndex + index}`);
   }
 
@@ -273,7 +365,6 @@ class CSVProcessor {
     txtUnlimitedFilePath,
     txtLimitedFilePath,
   ) {
-    // 第一步：过滤掉记录数小于 perCountryCount 的国家
     const filteredEntries = this.filterCountriesByMinCount(groupedEntries);
     const filteredCountries = Object.keys(filteredEntries).sort();
 
@@ -281,7 +372,6 @@ class CSVProcessor {
       const message = `没有国家满足最小记录数要求 (${this.config.perCountryCount} 条)`;
       console.log(message);
 
-      // 创建两个空文件
       await Promise.all([
         fs.writeFile(txtUnlimitedFilePath, "", "utf8"),
         fs.writeFile(txtLimitedFilePath, "", "utf8"),
@@ -305,14 +395,12 @@ class CSVProcessor {
       `符合条件国家 (记录数 >= ${this.config.perCountryCount}): ${filteredCountries.join("、")} (共 ${filteredCountries.length} 个国家)`,
     );
 
-    // 1. 生成不限制数量的版本（但只包含符合条件国家的所有记录，每个国家独立添加序号）
     const unlimitedResult = filteredCountries
       .map((country) =>
         this.formatEntriesWithIndex(filteredEntries[country], 1).join("\n"),
       )
       .join("\n");
 
-    // 2. 生成限制数量的版本（只提取符合条件国家的前 perCountryCount 条记录，每个国家独立添加序号）
     const limitedResult = filteredCountries
       .map((country) =>
         this.formatEntriesWithIndex(
@@ -322,13 +410,11 @@ class CSVProcessor {
       )
       .join("\n");
 
-    // 同时保存两个文件
     await Promise.all([
       fs.writeFile(txtUnlimitedFilePath, unlimitedResult, "utf8"),
       fs.writeFile(txtLimitedFilePath, limitedResult, "utf8"),
     ]);
 
-    // 统计信息
     const unlimitedCount = unlimitedResult
       .split("\n")
       .filter((line) => line.trim()).length;
@@ -339,15 +425,12 @@ class CSVProcessor {
     console.log(`\n不限制数量版本: ${path.basename(txtUnlimitedFilePath)}`);
     console.log(`  - 包含国家: ${filteredCountries.length} 个`);
     console.log(`  - 总记录数: ${unlimitedCount} 条`);
-    console.log(`  - 文件格式: IP:端口#国家名称序号`);
 
     console.log(`\n限制数量版本: ${path.basename(txtLimitedFilePath)}`);
     console.log(`  - 包含国家: ${filteredCountries.length} 个`);
     console.log(`  - 总记录数: ${limitedCount} 条`);
     console.log(`  - 每个国家最多提取: ${this.config.perCountryCount} 条`);
-    console.log(`  - 文件格式: IP:端口#国家名称序号`);
 
-    // 显示被排除的国家
     const excludedCountries = allCountries.filter(
       (country) => !filteredCountries.includes(country),
     );
@@ -371,7 +454,20 @@ class CSVProcessor {
 
 // 执行处理
 async function main() {
-  const processor = new CSVProcessor();
+  const args = process.argv.slice(2);
+  const config = { ...CONFIG };
+  
+  for (const arg of args) {
+    if (arg.startsWith('--outbound=')) {
+      const value = arg.split('=')[1];
+      if (['ipv4', 'ipv6', 'all'].includes(value)) {
+        config.outboundType = value;
+        console.log(`通过命令行参数设置: 出站IP过滤模式 = ${value}`);
+      }
+    }
+  }
+
+  const processor = new CSVProcessor(config);
   await processor.process();
 }
 

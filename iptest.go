@@ -293,12 +293,6 @@ func main() {
 			// 修改开始：获取响应字符串并解析
 			bodyStr := body.String()
 
-			// 输出完整的响应内容
-			fmt.Printf("\n========== Cloudflare Trace 响应 ==========\n")
-			fmt.Printf("IP地址: %s 端口: %d\n", ipAddr, port)
-			fmt.Printf("响应内容:\n%s\n", bodyStr)
-			fmt.Printf("==========================================\n\n")
-
 			if strings.Contains(bodyStr, "uag=Mozilla/5.0") {
 				if matches := regexp.MustCompile(`colo=([A-Z]+)[\s\S]*?loc=([A-Z]+)`).FindStringSubmatch(bodyStr); len(matches) > 2 {
 					dataCenter := matches[1]
@@ -341,6 +335,12 @@ func main() {
 						res.emoji = loc.Emoji
 						fmt.Printf("发现有效IP %s 端口 %d 位置信息 %s 出站IP %s 延迟 %d 毫秒\n",
 							ipAddr, port, loc.City_zh, responseData["ip"], tcpDuration.Milliseconds())
+						// 输出完整的响应内容
+						// fmt.Printf("========== Cloudflare Trace 响应 ==========\n")
+						// fmt.Printf("IP地址: %s 端口: %d\n", ipAddr, port)
+						// fmt.Printf("响应内容:\n%s\n", bodyStr)
+						// fmt.Printf("==========================================\n\n")
+
 					} else {
 						fmt.Printf("发现有效IP %s 端口 %d 位置信息未知 出站IP %s 延迟 %d 毫秒\n",
 							ipAddr, port, responseData["ip"], tcpDuration.Milliseconds())
