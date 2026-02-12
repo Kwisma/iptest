@@ -36,22 +36,33 @@ var (
 	speedTest    = flag.Int("speedtest", 5, "下载测速协程数量,设为0禁用测速")                                // 下载测速协程数量
 	speedTestURL = flag.String("url", "speed.cloudflare.com/__down?bytes=500000000", "测速文件地址") // 测速文件地址
 	enableTLS    = flag.Bool("tls", true, "是否启用TLS")                                           // TLS是否启用
-	delay = flag.Int("delay", 0, "延迟阈值(ms)，默认为0禁用延迟过滤")                           // 默认0，禁用过滤
+	delay        = flag.Int("delay", 0, "延迟阈值(ms)，默认为0禁用延迟过滤")                                 // 默认0，禁用过滤
 )
 
 type result struct {
 	ip          string        // IP地址
 	port        int           // 端口
 	dataCenter  string        // 数据中心
-	locCode    string        // 源IP位置
+	locCode     string        // 源IP位置
 	region      string        // 地区
 	city        string        // 城市
-	region_zh      string        // 地区
-	country        string        // 国家
-	city_zh      string        // 城市
-	emoji      string        // 国旗
+	region_zh   string        // 地区
+	country     string        // 国家
+	city_zh     string        // 城市
+	emoji       string        // 国旗
 	latency     string        // 延迟
 	tcpDuration time.Duration // TCP请求延迟
+	// 新增字段
+	outboundIP  string // 出站IP
+	visitScheme string // 访问协议
+	tlsVersion  string // TLS版本
+	sni         string // SNI
+	httpVersion string // HTTP版本
+	warp        string // WARP状态
+	gateway     string // Gateway状态
+	rbi         string // RBI状态
+	kex         string // 密钥交换
+	timestamp   string // 时间戳
 }
 
 type speedtestresult struct {
@@ -60,16 +71,16 @@ type speedtestresult struct {
 }
 
 type location struct {
-	Iata   string  `json:"iata"`
-	Lat    float64 `json:"lat"`
-	Lon    float64 `json:"lon"`
-	Cca2   string  `json:"cca2"`
-	Region string  `json:"region"`
-	City   string  `json:"city"`
+	Iata      string  `json:"iata"`
+	Lat       float64 `json:"lat"`
+	Lon       float64 `json:"lon"`
+	Cca2      string  `json:"cca2"`
+	Region    string  `json:"region"`
+	City      string  `json:"city"`
 	Region_zh string  `json:"region_zh"`
 	Country   string  `json:"country"`
-	City_zh string  `json:"city_zh"`
-	Emoji   string  `json:"emoji"`
+	City_zh   string  `json:"city_zh"`
+	Emoji     string  `json:"emoji"`
 }
 
 // 尝试提升文件描述符的上限
@@ -212,9 +223,9 @@ func main() {
 
 			tcpDuration := time.Since(start)
 			if *delay > 0 && tcpDuration.Milliseconds() > int64(*delay) {
-			    return // 超过延迟阈值直接返回（仅在delay>0时生效）
+				return
 			}
- 			
+
 			start = time.Now()
 
 			client := http.Client{
@@ -278,22 +289,67 @@ func main() {
 			if err != nil {
 				return
 			}
-			if strings.Contains(body.String(), "uag=Mozilla/5.0") {
-				if matches := regexp.MustCompile(`colo=([A-Z]+)[\s\S]*?loc=([A-Z]+)`).FindStringSubmatch(body.String()); len(matches) > 2 {
+
+			// 修改开始：获取响应字符串并解析
+			bodyStr := body.String()
+
+			// 输出完整的响应内容
+			fmt.Printf("\n========== Cloudflare Trace 响应 ==========\n")
+			fmt.Printf("IP地址: %s 端口: %d\n", ipAddr, port)
+			fmt.Printf("响应内容:\n%s\n", bodyStr)
+			fmt.Printf("==========================================\n\n")
+
+			if strings.Contains(bodyStr, "uag=Mozilla/5.0") {
+				if matches := regexp.MustCompile(`colo=([A-Z]+)[\s\S]*?loc=([A-Z]+)`).FindStringSubmatch(bodyStr); len(matches) > 2 {
 					dataCenter := matches[1]
 					locCode := matches[2]
 					loc, ok := locationMap[dataCenter]
+
+					// 解析所有key=value格式的字段
+					responseData := parseTraceResponse(bodyStr)
+
 					// 记录通过延迟检查的有效IP
 					atomic.AddInt32(&validCount, 1)
-					if ok {
-						fmt.Printf("发现有效IP %s 端口 %d 位置信息 %s 延迟 %d 毫秒\n", ipAddr, port, loc.City_zh, tcpDuration.Milliseconds())
-						resultChan <- result{ipAddr, port, dataCenter, locCode, loc.Region, loc.City, loc.Region_zh, loc.Country, loc.City_zh, loc.Emoji, fmt.Sprintf("%d ms", tcpDuration.Milliseconds()), tcpDuration}
-					} else {
-						fmt.Printf("发现有效IP %s 端口 %d 位置信息未知 延迟 %d 毫秒\n", ipAddr, port, tcpDuration.Milliseconds())
-						resultChan <- result{ipAddr, port, dataCenter, locCode, "", "", "", "", "", "", fmt.Sprintf("%d ms", tcpDuration.Milliseconds()), tcpDuration}
+
+					// 创建result对象，包含所有新字段
+					res := result{
+						ip:          ipAddr,
+						port:        port,
+						dataCenter:  dataCenter,
+						locCode:     locCode,
+						latency:     fmt.Sprintf("%d ms", tcpDuration.Milliseconds()),
+						tcpDuration: tcpDuration,
+						// 新增字段
+						outboundIP:  responseData["ip"],
+						visitScheme: responseData["visit_scheme"],
+						tlsVersion:  responseData["tls"],
+						sni:         responseData["sni"],
+						httpVersion: responseData["http"],
+						warp:        responseData["warp"],
+						gateway:     responseData["gateway"],
+						rbi:         responseData["rbi"],
+						kex:         responseData["kex"],
+						timestamp:   responseData["ts"],
 					}
+
+					if ok {
+						res.region = loc.Region
+						res.city = loc.City
+						res.region_zh = loc.Region_zh
+						res.country = loc.Country
+						res.city_zh = loc.City_zh
+						res.emoji = loc.Emoji
+						fmt.Printf("发现有效IP %s 端口 %d 位置信息 %s 出站IP %s 延迟 %d 毫秒\n",
+							ipAddr, port, loc.City_zh, responseData["ip"], tcpDuration.Milliseconds())
+					} else {
+						fmt.Printf("发现有效IP %s 端口 %d 位置信息未知 出站IP %s 延迟 %d 毫秒\n",
+							ipAddr, port, responseData["ip"], tcpDuration.Milliseconds())
+					}
+
+					resultChan <- res
 				}
 			}
+			// 修改结束
 		}(ip)
 	}
 
@@ -308,7 +364,7 @@ func main() {
 	}
 	var results []speedtestresult
 	if *speedTest > 0 {
-	    fmt.Printf("找到符合条件的ip 共%d个\n", atomic.LoadInt32(&validCount))
+		fmt.Printf("找到符合条件的ip 共%d个\n", atomic.LoadInt32(&validCount))
 		fmt.Printf("开始测速\n")
 		var wg2 sync.WaitGroup
 		wg2.Add(*speedTest)
@@ -361,16 +417,81 @@ func main() {
 	defer file.Close()
 
 	writer := csv.NewWriter(file)
+
+	// 修改表头，添加新字段
 	if *speedTest > 0 {
-		writer.Write([]string{"IP地址", "端口", "TLS", "数据中心", "源IP位置", "地区", "城市", "地区(中文)", "国家", "城市(中文)", "国旗", "网络延迟", "下载速度"})
+		writer.Write([]string{
+			"IP地址", "端口号", "TLS", "数据中心", "源IP位置",
+			"地区", "城市", "地区(中文)", "国家", "城市(中文)", "国旗",
+			"网络延迟", "下载速度",
+			"出站IP", "访问协议", "TLS版本", "SNI", "HTTP版本",
+			"WARP", "Gateway", "RBI", "密钥交换", "时间戳",
+		})
 	} else {
-		writer.Write([]string{"IP地址", "端口", "TLS", "数据中心", "源IP位置", "地区", "城市", "地区(中文)", "国家", "城市(中文)", "国旗", "网络延迟"})
+		writer.Write([]string{
+			"IP地址", "端口号", "TLS", "数据中心", "源IP位置",
+			"地区", "城市", "地区(中文)", "国家", "城市(中文)", "国旗",
+			"网络延迟",
+			"出站IP", "访问协议", "TLS版本", "SNI", "HTTP版本",
+			"WARP", "Gateway", "RBI", "密钥交换", "时间戳",
+		})
 	}
+
+	// 修改数据写入，添加新字段的值
 	for _, res := range results {
 		if *speedTest > 0 {
-			writer.Write([]string{res.result.ip, strconv.Itoa(res.result.port), strconv.FormatBool(*enableTLS), res.result.dataCenter, res.result.locCode, res.result.region, res.result.city, res.result.region_zh, res.result.country, res.result.city_zh, res.result.emoji, res.result.latency, fmt.Sprintf("%.0f kB/s", res.downloadSpeed)})
+			writer.Write([]string{
+				res.result.ip,
+				strconv.Itoa(res.result.port),
+				strconv.FormatBool(*enableTLS),
+				res.result.dataCenter,
+				res.result.locCode,
+				res.result.region,
+				res.result.city,
+				res.result.region_zh,
+				res.result.country,
+				res.result.city_zh,
+				res.result.emoji,
+				res.result.latency,
+				fmt.Sprintf("%.0f kB/s", res.downloadSpeed),
+				// 新增字段
+				res.result.outboundIP,
+				res.result.visitScheme,
+				res.result.tlsVersion,
+				res.result.sni,
+				res.result.httpVersion,
+				res.result.warp,
+				res.result.gateway,
+				res.result.rbi,
+				res.result.kex,
+				res.result.timestamp,
+			})
 		} else {
-			writer.Write([]string{res.result.ip, strconv.Itoa(res.result.port), strconv.FormatBool(*enableTLS), res.result.dataCenter, res.result.locCode, res.result.region, res.result.city, res.result.region_zh, res.result.country, res.result.city_zh, res.result.emoji, res.result.latency})
+			writer.Write([]string{
+				res.result.ip,
+				strconv.Itoa(res.result.port),
+				strconv.FormatBool(*enableTLS),
+				res.result.dataCenter,
+				res.result.locCode,
+				res.result.region,
+				res.result.city,
+				res.result.region_zh,
+				res.result.country,
+				res.result.city_zh,
+				res.result.emoji,
+				res.result.latency,
+				// 新增字段
+				res.result.outboundIP,
+				res.result.visitScheme,
+				res.result.tlsVersion,
+				res.result.sni,
+				res.result.httpVersion,
+				res.result.warp,
+				res.result.gateway,
+				res.result.rbi,
+				res.result.kex,
+				res.result.timestamp,
+			})
 		}
 	}
 
@@ -474,4 +595,24 @@ func getDownloadSpeed(ip string, port int) float64 {
 	// 输出结果
 	fmt.Printf("IP %s 端口 %d 下载速度 %.0f kB/s\n", ip, port, speed)
 	return speed
+}
+
+// 解析Cloudflare trace响应
+func parseTraceResponse(body string) map[string]string {
+	result := make(map[string]string)
+	lines := strings.Split(body, "\n")
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) == 2 {
+			key := strings.TrimSpace(parts[0])
+			value := strings.TrimSpace(parts[1])
+			result[key] = value
+		}
+	}
+	return result
 }
