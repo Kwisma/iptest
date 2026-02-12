@@ -6,6 +6,7 @@ const IPS_CSV = "init.csv";
 const LOCATIONS_JSON = "locations.json";
 const OUTPUT_FILE = "ip_tq_limited.txt";
 const OUTPUT_ALL = "ip_tq_unlimited.txt";
+const OUTPUT_TYPE = "ipv4";
 const LIMIT_PER_COUNTRY = 5; // 每个国家输出数量，设为0表示全部输出
 const CONCURRENCY_LIMIT = 200;
 const TIMEOUT_MS = 3000;
@@ -530,7 +531,7 @@ const addSequentialNumbers = (validProxyObjects, limitPerCountry = 5) => {
 /**
  * 暴力复用方式检测单个代理
  */
-async function checkProxy(proxyAddress, coloMap) {
+async function checkProxy(proxyAddress, coloMap, ipVersion = "all") {
   const parts = proxyAddress.split(":");
   if (parts.length !== 2) {
     return null;
@@ -572,19 +573,73 @@ async function checkProxy(proxyAddress, coloMap) {
       countryDisplay = `${locationInfo.emoji} ${locationInfo.country}`;
     }
 
-    // IPv6出口 - 拒绝
-    if (isIPv6(outboundIp)) {
+    const isOutboundIPv6 = isIPv6(outboundIp); // 修改2: 判断出口IP版本
+
+    // 修改3: 根据ipVersion参数过滤
+    if (ipVersion === "ipv4" && isOutboundIPv6) {
+      // 仅IPv4模式，拒绝IPv6出口
       if (locationInfo) {
         console.log(
-          `  ⚠️ ${proxyAddress.padEnd(21)} IPv6出口 ${countryDisplay} (${elapsed}ms)`,
+          `  ⚠️ ${proxyAddress.padEnd(21)} IPv6出口 ${countryDisplay} (${elapsed}ms) - 已过滤`,
         );
       } else {
         console.log(
-          `  ⚠️ ${proxyAddress.padEnd(21)} IPv6出口 COLO:${colo || "未知"} (${elapsed}ms)`,
+          `  ⚠️ ${proxyAddress.padEnd(21)} IPv6出口 COLO:${colo || "未知"} (${elapsed}ms) - 已过滤`,
         );
       }
       connectionPool.release(ip, port);
       return null;
+    }
+
+    if (ipVersion === "ipv6" && !isOutboundIPv6) {
+      // 仅IPv6模式，拒绝IPv4出口
+      if (locationInfo) {
+        console.log(
+          `  ⚠️ ${proxyAddress.padEnd(21)} IPv4出口 ${countryDisplay} (${elapsed}ms) - 已过滤`,
+        );
+      } else {
+        console.log(
+          `  ⚠️ ${proxyAddress.padEnd(21)} IPv4出口 COLO:${colo || "未知"} (${elapsed}ms) - 已过滤`,
+        );
+      }
+      connectionPool.release(ip, port);
+      return null;
+    }
+
+    // 修改4: IPv6出口处理
+    if (isOutboundIPv6) {
+      // IPv6出口必须要有colo信息
+      if (!colo || !coloMap.has(colo)) {
+        if (locationInfo) {
+          console.log(
+            `  ⚠️ ${proxyAddress.padEnd(21)} IPv6出口 ${countryDisplay} (${elapsed}ms) - 未知数据中心`,
+          );
+        } else {
+          console.log(
+            `  ⚠️ ${proxyAddress.padEnd(21)} IPv6出口 COLO:${colo || "未知"} (${elapsed}ms) - 不在数据库`,
+          );
+        }
+        connectionPool.release(ip, port);
+        return null;
+      }
+
+      // ✅ 有效IPv6代理
+      console.log(
+        `  ✅ ${proxyAddress.padEnd(21)} IPv6出口 ${countryDisplay} (${elapsed}ms)`,
+      );
+
+      // 释放连接回池
+      connectionPool.release(ip, port);
+
+      // 返回包含完整信息的对象
+      return {
+        ipPort: proxyAddress,
+        country: locationInfo.country,
+        emoji: locationInfo.emoji,
+        colo: colo,
+        timestamp: Date.now(),
+        ipVersion: "ipv6", // 修改5: 标记IP版本
+      };
     }
 
     // IPv4出口且colo必须存在
@@ -617,6 +672,7 @@ async function checkProxy(proxyAddress, coloMap) {
       emoji: locationInfo.emoji,
       colo: colo,
       timestamp: Date.now(),
+      ipVersion: "ipv4", // 修改6: 标记IP版本
     };
   } catch (error) {
     const elapsed = Date.now() - startTime;
@@ -639,7 +695,6 @@ async function checkProxy(proxyAddress, coloMap) {
     return null;
   }
 }
-
 /**
  * 并发控制处理器 - 工作池模式（修复版）
  */
@@ -781,7 +836,7 @@ async function main() {
     const validProxyObjects = await processBatch(
       shuffled,
       CONCURRENCY_LIMIT,
-      checkProxy,
+      (proxy, map) => checkProxy(proxy, map, OUTPUT_TYPE),
       coloMap,
     );
 
