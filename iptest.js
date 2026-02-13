@@ -556,8 +556,8 @@ async function readIpsCsv() {
     for (let i = 1; i < lines.length; i++) {
       const columns = lines[i].split(",");
       if (columns.length > Math.max(ipIndex, portIndex)) {
-        const ip = columns[ipIndex]?.trim();
-        const port = columns[portIndex]?.trim();
+        const ip = columns[ipIndex]?.replace(/"/g, '').trim();
+        const port = columns[portIndex]?.replace(/"/g, '').trim();
 
         if (ip && port && net.isIP(ip) && !isNaN(parseInt(port))) {
           proxyList.push(`${ip}:${port}`);
