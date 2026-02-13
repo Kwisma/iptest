@@ -2,6 +2,7 @@ node_modules/
 city.json
 data.json
 init.csv
+locations.json
 ip.txt
 ip_tq.csv
 ip_tq_*.txt
