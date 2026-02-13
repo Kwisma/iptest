@@ -1,16 +1,40 @@
-import { promises as fs } from "fs";
+import fs from 'fs';
 import net from "net";
 import tls from "tls";
+import https from 'https';
+import path from 'path';
 
+// 输入CSV文件路径，包含代理IP和端口信息
 const IPS_CSV = "init.csv";
+
+// locations.json 文件路径，用于存储地理位置信息
 const LOCATIONS_JSON = "locations.json";
+
+// 输出文件路径，保存每个国家前LIMIT_PER_COUNTRY个有效代理IP
 const OUTPUT_FILE = "ip_tq_limited.txt";
+
+// 输出文件路径，保存所有有效代理IP（不限制数量）
 const OUTPUT_ALL = "ip_tq_unlimited.txt";
+
+// 设置代理IP的类型，支持 'ipv4' 和 'ipv6'
 const OUTPUT_TYPE = "ipv4";
-const LIMIT_PER_COUNTRY = 5; // 每个国家输出数量，设为0表示全部输出
+
+// 从哪里下载locations.json文件
+const LOCATIONS_URL = "https://locations-adw.pages.dev";
+
+// 每个国家输出的代理数量
+const LIMIT_PER_COUNTRY = 5;
+
+// 控制并发请求的最大数量，避免过高的并发造成负载过大
 const CONCURRENCY_LIMIT = 200;
+
+// HTTP请求的超时设置，单位为毫秒
 const TIMEOUT_MS = 3000;
+
+// TCP连接的超时时间，单位为毫秒
 const TCP_TIMEOUT_MS = 2000;
+
+// TLS连接的超时时间，单位为毫秒
 const TLS_TIMEOUT_MS = 2000;
 
 // 在文件开头，imports 之后添加
@@ -43,6 +67,54 @@ process.on('unhandledRejection', (reason, promise) => {
   }
   console.error('未处理的Promise拒绝:', reason);
 });
+
+// 检查 locations.json 是否存在
+async function checkLocationsJson() {
+  try {
+    await fs.promises.access(LOCATIONS_JSON);
+    console.log(`${LOCATIONS_JSON} 文件已存在`);
+  } catch (error) {
+    console.log(`${LOCATIONS_JSON} 文件不存在，正在下载...`);
+    await downloadLocationsJson();
+  }
+}
+
+// 从 URL 下载 locations.json
+async function downloadLocationsJson() {
+  return new Promise((resolve, reject) => {
+    https.get(LOCATIONS_URL, (response) => {
+      // 如果状态码不是 200，立即拒绝并退出
+      if (response.statusCode !== 200) {
+        console.log(`下载失败，HTTP 状态码: ${response.statusCode}`);
+        reject(new Error(`下载失败，HTTP 状态码: ${response.statusCode}`));
+        return;
+      } else {
+        let fileContent = '';
+        
+        // 监听数据流
+        response.on('data', (chunk) => {
+          fileContent += chunk;
+        });
+
+        response.on('end', () => {
+          // 如果文件内容为空，则不创建文件并返回错误
+          if (fileContent.trim() === '') {
+            console.log(`${LOCATIONS_JSON} 文件内容为空，未保存`);
+            reject(new Error('文件内容为空，未保存'));
+            return; // 防止继续创建文件
+          }
+
+          // 如果文件内容有效时，创建文件并保存
+          fs.writeFileSync(LOCATIONS_JSON, fileContent, 'utf8');
+          console.log(`${LOCATIONS_JSON} 下载并保存完成`);
+          resolve();
+        });
+      }
+    }).on('error', (err) => {
+      reject(new Error(`下载过程中发生错误: ${err.message}`));
+    });
+  });
+}
 /**
  * 自定义TCP/TLS连接池 - 暴力复用模式（终极修复版）
  */
@@ -459,7 +531,7 @@ const extractFromTrace = (traceText) => {
  */
 async function readIpsCsv() {
   try {
-    const content = await fs.readFile(IPS_CSV, "utf8");
+    const content = await fs.promises.readFile(IPS_CSV, "utf8");
     const lines = content.split("\n").filter((line) => line.trim());
 
     if (lines.length === 0) {
@@ -508,7 +580,7 @@ async function readIpsCsv() {
  */
 async function readLocationsJson() {
   try {
-    const content = await fs.readFile(LOCATIONS_JSON, "utf8");
+    const content = await fs.promises.readFile(LOCATIONS_JSON, "utf8");
     const locations = JSON.parse(content);
 
     const coloMap = new Map();
@@ -886,6 +958,7 @@ async function main() {
     }
 
     // 读取locations.json
+    await checkLocationsJson();
     const coloMap = await readLocationsJson();
 
     // 打乱顺序，避免集中测试同一IP段
@@ -917,13 +990,13 @@ async function main() {
     // 保存结果
     if (allProxies.length > 0) {
       // 1. 保存全部代理（带序号）
-      await fs.writeFile(OUTPUT_ALL, allProxies.join("\n"), "utf8");
+      await fs.promises.writeFile(OUTPUT_ALL, allProxies.join("\n"), "utf8");
       console.log(
         `💾 已保存: ${OUTPUT_ALL} (全部代理, ${allProxies.length}条)`,
       );
 
       // 2. 保存每个国家前N个代理（带序号）
-      await fs.writeFile(OUTPUT_FILE, limitedProxies.join("\n"), "utf8");
+      await fs.promises.writeFile(OUTPUT_FILE, limitedProxies.join("\n"), "utf8");
       console.log(
         `💾 已保存: ${OUTPUT_FILE} (每个国家前${LIMIT_PER_COUNTRY}个, ${limitedProxies.length}条)`,
       );
