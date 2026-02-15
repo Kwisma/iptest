@@ -1,8 +1,8 @@
-import fs from 'fs';
+import fs from "fs";
 import net from "net";
 import tls from "tls";
-import https from 'https';
-import path from 'path';
+import https from "https";
+import path from "path";
 
 // 输入CSV文件路径，包含代理IP和端口信息
 const IPS_CSV = "init.csv";
@@ -11,10 +11,10 @@ const IPS_CSV = "init.csv";
 const LOCATIONS_JSON = "locations.json";
 
 // 输出文件路径，保存每个国家前LIMIT_PER_COUNTRY个有效代理IP
-const OUTPUT_FILE = "ip_tq_limited.txt";
+const OUTPUT_FILE = "ip_top5.txt";
 
 // 输出文件路径，保存所有有效代理IP（不限制数量）
-const OUTPUT_ALL = "ip_tq_unlimited.txt";
+const OUTPUT_ALL = "ip_all.txt";
 
 // 设置代理IP的类型，支持 'ipv4' 和 'ipv6'
 const OUTPUT_TYPE = "ipv4";
@@ -38,34 +38,38 @@ const TCP_TIMEOUT_MS = 2000;
 const TLS_TIMEOUT_MS = 2000;
 
 // 在文件开头，imports 之后添加
-process.on('uncaughtException', (error) => {
+process.on("uncaughtException", (error) => {
   // 忽略所有预期的网络错误
-  if (error.code === 'EHOSTUNREACH' || 
-      error.code === 'ECONNREFUSED' || 
-      error.code === 'ETIMEDOUT' ||
-      error.code === 'ENETUNREACH' ||
-      error.code === 'EADDRNOTAVAIL' ||
-      error.code === 'ECONNRESET' ||
-      error.code === 'EPIPE' ||
-      error.message.includes('bad record type')) {
+  if (
+    error.code === "EHOSTUNREACH" ||
+    error.code === "ECONNREFUSED" ||
+    error.code === "ETIMEDOUT" ||
+    error.code === "ENETUNREACH" ||
+    error.code === "EADDRNOTAVAIL" ||
+    error.code === "ECONNRESET" ||
+    error.code === "EPIPE" ||
+    error.message.includes("bad record type")
+  ) {
     // 这些是预期的错误，安静地忽略
     return;
   }
-  console.error('未捕获的异常:', error);
+  console.error("未捕获的异常:", error);
 });
 
-process.on('unhandledRejection', (reason, promise) => {
+process.on("unhandledRejection", (reason, promise) => {
   // 忽略所有预期的网络错误
-  if (reason?.code === 'EHOSTUNREACH' || 
-      reason?.code === 'ECONNREFUSED' ||
-      reason?.code === 'ETIMEDOUT' ||
-      reason?.code === 'ENETUNREACH' ||
-      reason?.code === 'EADDRNOTAVAIL' ||
-      reason?.code === 'ECONNRESET' ||
-      reason?.code === 'ERR_SSL_BAD_RECORD_TYPE') {
+  if (
+    reason?.code === "EHOSTUNREACH" ||
+    reason?.code === "ECONNREFUSED" ||
+    reason?.code === "ETIMEDOUT" ||
+    reason?.code === "ENETUNREACH" ||
+    reason?.code === "EADDRNOTAVAIL" ||
+    reason?.code === "ECONNRESET" ||
+    reason?.code === "ERR_SSL_BAD_RECORD_TYPE"
+  ) {
     return;
   }
-  console.error('未处理的Promise拒绝:', reason);
+  console.error("未处理的Promise拒绝:", reason);
 });
 
 // 检查 locations.json 是否存在
@@ -82,37 +86,39 @@ async function checkLocationsJson() {
 // 从 URL 下载 locations.json
 async function downloadLocationsJson() {
   return new Promise((resolve, reject) => {
-    https.get(LOCATIONS_URL, (response) => {
-      // 如果状态码不是 200，立即拒绝并退出
-      if (response.statusCode !== 200) {
-        console.log(`下载失败，HTTP 状态码: ${response.statusCode}`);
-        reject(new Error(`下载失败，HTTP 状态码: ${response.statusCode}`));
-        return;
-      } else {
-        let fileContent = '';
-        
-        // 监听数据流
-        response.on('data', (chunk) => {
-          fileContent += chunk;
-        });
+    https
+      .get(LOCATIONS_URL, (response) => {
+        // 如果状态码不是 200，立即拒绝并退出
+        if (response.statusCode !== 200) {
+          console.log(`下载失败，HTTP 状态码: ${response.statusCode}`);
+          reject(new Error(`下载失败，HTTP 状态码: ${response.statusCode}`));
+          return;
+        } else {
+          let fileContent = "";
 
-        response.on('end', () => {
-          // 如果文件内容为空，则不创建文件并返回错误
-          if (fileContent.trim() === '') {
-            console.log(`${LOCATIONS_JSON} 文件内容为空，未保存`);
-            reject(new Error('文件内容为空，未保存'));
-            return; // 防止继续创建文件
-          }
+          // 监听数据流
+          response.on("data", (chunk) => {
+            fileContent += chunk;
+          });
 
-          // 如果文件内容有效时，创建文件并保存
-          fs.writeFileSync(LOCATIONS_JSON, fileContent, 'utf8');
-          console.log(`${LOCATIONS_JSON} 下载并保存完成`);
-          resolve();
-        });
-      }
-    }).on('error', (err) => {
-      reject(new Error(`下载过程中发生错误: ${err.message}`));
-    });
+          response.on("end", () => {
+            // 如果文件内容为空，则不创建文件并返回错误
+            if (fileContent.trim() === "") {
+              console.log(`${LOCATIONS_JSON} 文件内容为空，未保存`);
+              reject(new Error("文件内容为空，未保存"));
+              return; // 防止继续创建文件
+            }
+
+            // 如果文件内容有效时，创建文件并保存
+            fs.writeFileSync(LOCATIONS_JSON, fileContent, "utf8");
+            console.log(`${LOCATIONS_JSON} 下载并保存完成`);
+            resolve();
+          });
+        }
+      })
+      .on("error", (err) => {
+        reject(new Error(`下载过程中发生错误: ${err.message}`));
+      });
   });
 }
 /**
@@ -197,10 +203,10 @@ class ConnectionPool {
     return new Promise((resolve, reject) => {
       // 1. 先创建socket实例
       const socket = new net.Socket();
-      
+
       // 标记是否已经处理完成
       let isDone = false;
-      
+
       // 2. 立即设置错误处理器 - 在连接开始之前！
       const onError = (err) => {
         if (isDone) return;
@@ -208,12 +214,12 @@ class ConnectionPool {
         cleanup();
         reject(new Error(`TCP连接失败: ${err.message}`));
       };
-      
-      socket.once('error', onError);
-      
+
+      socket.once("error", onError);
+
       // 3. 设置超时
       socket.setTimeout(TCP_TIMEOUT_MS);
-      
+
       // 4. 连接成功处理器
       const onConnect = () => {
         if (isDone) return;
@@ -223,7 +229,7 @@ class ConnectionPool {
         socket.setNoDelay(true);
         resolve(socket);
       };
-      
+
       // 5. 超时处理器
       const onTimeout = () => {
         if (isDone) return;
@@ -231,16 +237,16 @@ class ConnectionPool {
         cleanup();
         reject(new Error(`TCP连接超时 (${TCP_TIMEOUT_MS}ms)`));
       };
-      
+
       const cleanup = () => {
         socket.removeListener("connect", onConnect);
         socket.removeListener("error", onError);
         socket.removeListener("timeout", onTimeout);
       };
-      
+
       socket.once("connect", onConnect);
       socket.once("timeout", onTimeout);
-      
+
       // 6. 最后才发起连接
       socket.connect(parseInt(port), ip);
     });
@@ -269,7 +275,7 @@ class ConnectionPool {
       };
 
       // 立即监听错误
-      tlsSocket.once('error', onError);
+      tlsSocket.once("error", onError);
 
       const onSecureConnect = () => {
         if (isDone) return;
@@ -556,8 +562,8 @@ async function readIpsCsv() {
     for (let i = 1; i < lines.length; i++) {
       const columns = lines[i].split(",");
       if (columns.length > Math.max(ipIndex, portIndex)) {
-        const ip = columns[ipIndex]?.replace(/"/g, '').trim();
-        const port = columns[portIndex]?.replace(/"/g, '').trim();
+        const ip = columns[ipIndex]?.replace(/"/g, "").trim();
+        const port = columns[portIndex]?.replace(/"/g, "").trim();
 
         if (ip && port && net.isIP(ip) && !isNaN(parseInt(port))) {
           proxyList.push(`${ip}:${port}`);
@@ -815,8 +821,8 @@ async function checkProxy(proxyAddress, coloMap, ipVersion = "all") {
       }
     } else {
       //console.log(
-     //   `  ❌ ${proxyAddress.padEnd(21)} ${error.message.substring(0, 30)} (${elapsed}ms)`,
-    //  );
+      //   `  ❌ ${proxyAddress.padEnd(21)} ${error.message.substring(0, 30)} (${elapsed}ms)`,
+      //  );
     }
 
     // 发生错误时也要释放连接
@@ -996,7 +1002,11 @@ async function main() {
       );
 
       // 2. 保存每个国家前N个代理（带序号）
-      await fs.promises.writeFile(OUTPUT_FILE, limitedProxies.join("\n"), "utf8");
+      await fs.promises.writeFile(
+        OUTPUT_FILE,
+        limitedProxies.join("\n"),
+        "utf8",
+      );
       console.log(
         `💾 已保存: ${OUTPUT_FILE} (每个国家前${LIMIT_PER_COUNTRY}个, ${limitedProxies.length}条)`,
       );

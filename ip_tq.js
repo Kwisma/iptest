@@ -31,12 +31,8 @@ class CSVProcessor {
   async process() {
     try {
       const csvFilePath = this.getFilePath(this.config.targetFile);
-      const txtUnlimitedFilePath = this.getFilePath(
-        this.config.targetFile.replace(".csv", "_unlimited.txt"),
-      );
-      const txtLimitedFilePath = this.getFilePath(
-        this.config.targetFile.replace(".csv", "_limited.txt"),
-      );
+      const txtUnlimitedFilePath = this.getFilePath("ip_all.txt");
+      const txtLimitedFilePath = this.getFilePath("ip_top5.txt");
 
       await this.validateFileExists(csvFilePath);
       console.log(`开始处理文件: ${this.config.targetFile}`);

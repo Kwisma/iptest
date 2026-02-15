@@ -2,7 +2,7 @@ import { promises as fs } from "fs";
 import net from "net";
 import tls from "tls";
 
-const INPUT_FILE = "ip_tq_unlimited.txt";
+const INPUT_FILE = "ip_all.txt";
 const OUTPUT_FILE_ALL = "proxyip_all.txt";
 const OUTPUT_FILE_TOP5 = "proxyip_top5.txt";
 const FILTER_STRING = "#🇯🇵日本";
