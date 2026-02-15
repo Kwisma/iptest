@@ -26,12 +26,12 @@ function loadIpPortList(filePath) {
   }
 }
 
-let testResults = {}; // 存储每个IP的测试结果 { "ip:port": { location, successes, failures, latencies } }
-let completedTests = 0; // 已完成测试计数
-let activeConnections = 0; // 活跃连接数
-let nextTestIndex = 0; // 下一个要测试的IP索引
-const MAX_CONCURRENT = 50; // 最大并发数
-const TESTS_PER_IP = 4; // 每个IP测试次数
+let testResults = {};
+let completedTests = 0;
+let activeConnections = 0;
+let nextTestIndex = 0;
+const MAX_CONCURRENT = 50;
+const TESTS_PER_IP = 4;
 
 const vlessConfig = {
   protocol: "vless",
@@ -43,12 +43,10 @@ const vlessConfig = {
   type: "ws",
   host: "sub.mot.ip-ddns.com",
   path: "/",
-  fragment: "1,40-60,30-50,tlshello",
   encryption: "none",
   name: "测试",
 };
 
-// 从 JSON 配置生成连接参数
 function getConnectionParams() {
   return {
     wsUrl: `wss://${vlessConfig.server}:${vlessConfig.port}${vlessConfig.path}`,
@@ -56,6 +54,8 @@ function getConnectionParams() {
       Host: vlessConfig.host,
       "Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ==",
       "Sec-WebSocket-Version": 13,
+      Upgrade: "websocket",
+      Connection: "Upgrade",
     },
     tlsOptions: {
       rejectUnauthorized: false,
@@ -64,7 +64,59 @@ function getConnectionParams() {
   };
 }
 
-// 获取或创建测试结果对象
+// 生成VLESS协议请求数据包（只握手，不发送实际数据）
+function generateVLESSHandshake() {
+  // 将UUID从字符串转为字节数组
+  const uuidStr = vlessConfig.uuid.replace(/-/g, "");
+  const uuidBytes = new Uint8Array(16);
+  for (let i = 0; i < 32; i += 2) {
+    uuidBytes[i / 2] = parseInt(uuidStr.substring(i, i + 2), 16);
+  }
+
+  // 构建VLESS请求头
+  // 格式: 版本(1) + UUID(16) + 附加长度(1) + 端口(2) + 地址类型(1) + 地址
+
+  // 版本: 0
+  const version = new Uint8Array([0]);
+
+  // 附加数据长度: 0
+  const addonsLen = new Uint8Array([0]);
+
+  // 目标端口 (使用一个常见端口)
+  const portBytes = new Uint8Array(2);
+  const portView = new DataView(portBytes.buffer);
+  portView.setUint16(0, 80); // 使用80端口
+
+  // 地址类型: 2 (域名)
+  const addrType = new Uint8Array([2]);
+
+  // 目标域名 (使用一个简单域名)
+  const targetHost = "www.google.com";
+  const hostBytes = new TextEncoder().encode(targetHost);
+  const hostLen = new Uint8Array([hostBytes.length]);
+
+  // 合并请求头
+  const headerLength = 1 + 16 + 1 + 2 + 1 + 1 + hostBytes.length;
+  const request = new Uint8Array(headerLength);
+
+  let offset = 0;
+  request.set(version, offset);
+  offset += 1;
+  request.set(uuidBytes, offset);
+  offset += 16;
+  request.set(addonsLen, offset);
+  offset += 1;
+  request.set(portBytes, offset);
+  offset += 2;
+  request.set(addrType, offset);
+  offset += 1;
+  request.set(hostLen, offset);
+  offset += 1;
+  request.set(hostBytes, offset);
+
+  return request;
+}
+
 function getTestResult(ip, port, location) {
   const key = `${ip}:${port}`;
   if (!testResults[key]) {
@@ -81,26 +133,10 @@ function getTestResult(ip, port, location) {
   return testResults[key];
 }
 
-// 检查IP是否已完成所有测试
-function isTestCompleted(ip, port) {
-  const key = `${ip}:${port}`;
-  const result = testResults[key];
-  return result && result.successes + result.failures >= TESTS_PER_IP;
-}
-
-// 检查IP是否通过所有测试
-function isPassed(ip, port) {
-  const key = `${ip}:${port}`;
-  const result = testResults[key];
-  return result && result.successes === TESTS_PER_IP;
-}
-
-// 创建 WebSocket 客户端连接函数
 function createWebSocketConnection(ip, port, location, testRound) {
   activeConnections++;
 
   const params = getConnectionParams();
-  // 替换 URL 中的服务器地址和端口为当前测试的 IP 和端口
   const wsUrl = `wss://${ip}:${port}${vlessConfig.path}`;
 
   const tlsOptions = {
@@ -111,119 +147,117 @@ function createWebSocketConnection(ip, port, location, testRound) {
   };
 
   const result = getTestResult(ip, port, location);
+
   console.log(
-    `🔄 开始测试 ${location} (${ip}:${port}) 第${testRound}/${TESTS_PER_IP}次 [活跃: ${activeConnections}, 已完成: ${completedTests}, 总测试数: ${ipPortList.length * TESTS_PER_IP}]`,
+    `🔄 测试 ${location} (${ip}:${port}) 第${testRound}/${TESTS_PER_IP}次 [活跃: ${activeConnections}, 已完成: ${completedTests}]`,
   );
 
   const ws = new WebSocket(wsUrl, {
     headers: params.headers,
     createConnection: () => tls.connect(tlsOptions),
-    timeout: 2000,
+    handshakeTimeout: 5000,
   });
 
-  let sendTime;
-  let messageReceived = false;
+  let handshakeTime;
+  let handshakeReceived = false;
   let timeoutId;
-  let testCompleted = false; // 防止重复完成
+  let testCompleted = false;
 
-  // 设置超时处理
   timeoutId = setTimeout(() => {
-    if (!messageReceived && !testCompleted) {
-      console.log(`⏰ 测试超时 ${location} (${ip}:${port}) 第${testRound}次`);
+    if (!testCompleted && !handshakeReceived) {
+      console.log(`⏰ 超时 ${location} (${ip}:${port}) 第${testRound}次`);
       ws.terminate();
-      cleanup();
-      if (!testCompleted) {
-        testCompleted = true;
-        handleTestCompletion(ip, port, location, false, testRound);
-      }
+      handleTestCompletion(ip, port, location, false, testRound, "timeout");
     }
-  }, 2000);
-
-  function cleanup() {
-    if (timeoutId) {
-      clearTimeout(timeoutId);
-      timeoutId = null;
-    }
-  }
+  }, 5000);
 
   ws.on("open", () => {
-    console.log(`✅ 已建立连接 ${location} (${ip}:${port}) 第${testRound}次`);
-    sendTime = Date.now();
-    ws.send("ping");
+    console.log(
+      `✅ WebSocket连接成功 ${location} (${ip}:${port}) 第${testRound}次`,
+    );
+    handshakeTime = Date.now();
+
+    // 发送VLESS握手请求
+    const vlessHandshake = generateVLESSHandshake();
+    ws.send(vlessHandshake);
+    console.log(`📤 已发送VLESS握手请求`);
   });
 
   ws.on("message", (data) => {
-    if (messageReceived || testCompleted) return;
-    messageReceived = true;
+    if (testCompleted) return;
 
-    console.log(
-      `📨 已接收数据 from ${location} 第${testRound}次: ${data.toString()}`,
-    );
+    const chunk = Buffer.isBuffer(data) ? data : Buffer.from(data);
+    // 检查是否是服务端的握手响应 (前两个字节是 [version, 0])
+    if (chunk.length >= 2 && chunk[1] === 0) {
+      const handshakeTime_ms = Date.now() - handshakeTime;
+      console.log(
+        `🎉 VLESS握手成功 ${location} 第${testRound}次! 耗时: ${handshakeTime_ms}ms`,
+      );
+      console.log(`VLESS握手数据：${chunk}`);
 
-    // 计算延迟
-    const receiveTime = Date.now();
-    const latency = receiveTime - sendTime;
-    console.log(`✅ 延迟: ${latency} ms [${location}] 第${testRound}次`);
+      handshakeReceived = true;
 
-    ws.close();
-
-    if (!testCompleted) {
-      testCompleted = true;
-      handleTestCompletion(ip, port, location, true, testRound, latency);
+      if (!testCompleted) {
+        testCompleted = true;
+        clearTimeout(timeoutId);
+        ws.close();
+        handleTestCompletion(
+          ip,
+          port,
+          location,
+          true,
+          testRound,
+          handshakeTime_ms,
+        );
+      }
     }
   });
 
   ws.on("close", () => {
-    console.log(`🔚 连接关闭 ${location} (${ip}:${port}) 第${testRound}次`);
-    cleanup();
-    if (!testCompleted) {
-      testCompleted = true;
-      handleTestCompletion(ip, port, location, false, testRound);
+    clearTimeout(timeoutId);
+    if (!testCompleted && !handshakeReceived) {
+      handleTestCompletion(ip, port, location, false, testRound, "closed");
     }
   });
 
   ws.on("error", (error) => {
     console.log(
-      `❌ 连接错误 ${location} (${ip}:${port}) 第${testRound}次: ${error.message}`,
+      `❌ 错误 ${location} (${ip}:${port}) 第${testRound}次: ${error.message}`,
     );
-    cleanup();
+    clearTimeout(timeoutId);
     if (!testCompleted) {
       testCompleted = true;
-      handleTestCompletion(ip, port, location, false, testRound);
+      handleTestCompletion(ip, port, location, false, testRound, error.message);
     }
   });
 }
 
-// 处理测试完成
-function handleTestCompletion(ip, port, location, success, testRound, latency) {
+function handleTestCompletion(ip, port, location, success, testRound, details) {
   const result = getTestResult(ip, port, location);
 
   if (success) {
     result.successes++;
-    result.latencies.push(latency);
+    if (typeof details === "number") {
+      result.latencies.push(details);
+    }
     console.log(
-      `✅ 第${testRound}次测试成功 (${result.successes}/${TESTS_PER_IP} 成功)`,
+      `✅ 第${testRound}次测试成功 (${result.successes}/${TESTS_PER_IP})`,
     );
   } else {
     result.failures++;
     console.log(
-      `❌ 第${testRound}次测试失败 (${result.failures}/${TESTS_PER_IP} 失败)`,
+      `❌ 第${testRound}次测试失败 (${result.failures}/${TESTS_PER_IP}) - ${details}`,
     );
   }
 
   activeConnections--;
   completedTests++;
 
-  console.log(
-    `📊 进度: ${completedTests}/${ipPortList.length * TESTS_PER_IP} 次测试 (活跃: ${activeConnections})`,
-  );
-
-  // 检查是否所有测试已完成
   if (result.successes + result.failures === TESTS_PER_IP) {
     result.completed = true;
     if (result.successes === TESTS_PER_IP) {
       console.log(
-        `🎉 ${location} (${ip}:${port}) 全部${TESTS_PER_IP}次测试通过！平均延迟: ${calculateAverage(result.latencies)}ms`,
+        `🎉 ${location} (${ip}:${port}) 全部通过！平均延迟: ${calculateAverage(result.latencies)}ms`,
       );
     } else {
       console.log(
@@ -232,18 +266,15 @@ function handleTestCompletion(ip, port, location, success, testRound, latency) {
     }
   }
 
-  // 如果这个IP还有剩余测试次数，继续测试
   if (result.successes + result.failures < TESTS_PER_IP) {
     const nextRound = result.successes + result.failures + 1;
     setTimeout(() => {
       createWebSocketConnection(ip, port, location, nextRound);
-    }, 100); // 稍微延迟一下再开始下一次测试
+    }, 500);
   }
 
-  // 启动下一个IP的测试
   startNextTest();
 
-  // 所有测试完成
   if (completedTests === ipPortList.length * TESTS_PER_IP) {
     console.log("\n🎉 所有测试完成");
     saveResults();
@@ -251,16 +282,13 @@ function handleTestCompletion(ip, port, location, success, testRound, latency) {
   }
 }
 
-// 计算平均延迟
 function calculateAverage(latencies) {
   if (latencies.length === 0) return 0;
   const sum = latencies.reduce((a, b) => a + b, 0);
   return Math.round(sum / latencies.length);
 }
 
-// 启动下一个测试
 function startNextTest() {
-  // 当活跃连接数小于最大并发数，且还有未开始测试的IP时，启动新测试
   while (
     activeConnections < MAX_CONCURRENT &&
     nextTestIndex < ipPortList.length
@@ -272,9 +300,7 @@ function startNextTest() {
       nextIpPort.location,
     );
 
-    // 检查这个IP是否已经开始测试
     if (result.successes + result.failures === 0) {
-      // 第一次启动这个IP的测试
       createWebSocketConnection(
         nextIpPort.ip,
         nextIpPort.port,
@@ -286,23 +312,21 @@ function startNextTest() {
   }
 }
 
-// 启动并发测试
 function startConcurrentTests() {
   console.log(
     `🚀 开始并发测试，每个IP测试${TESTS_PER_IP}次，最大并发数: ${MAX_CONCURRENT}`,
   );
-  startNextTest(); // 这会启动第一批测试
+  console.log(`📋 判断标准: VLESS握手成功即视为通过`);
+  startNextTest();
 }
 
-// 重新排序并保存结果
 function saveResults() {
   const top5Data = [];
   const allData = [];
-  const countryOrder = {}; // 记录每个国家的出现顺序
+  const countryOrder = {};
   const countryCounters = {};
   const top5Counters = {};
 
-  // 收集通过的IP（按平均延迟排序）
   const passedIPs = [];
 
   Object.values(testResults).forEach((result) => {
@@ -311,21 +335,22 @@ function saveResults() {
         ...result,
         avgLatency: calculateAverage(result.latencies),
       });
+    } else {
+      console.log(
+        `❌ 失败的IP: ${result.ip}:${result.port} - ${result.location} (成功: ${result.successes}/${TESTS_PER_IP})`,
+      );
     }
   });
 
-  // 按平均延迟排序
   passedIPs.sort((a, b) => a.avgLatency - b.avgLatency);
 
   console.log(`\n📊 通过测试的IP: ${passedIPs.length}/${ipPortList.length}`);
 
-  // 按国家分组
   const countryGroups = {};
   passedIPs.forEach((item) => {
     const countryBase = item.location.replace(/\d+$/, "").trim();
     if (!countryGroups[countryBase]) {
       countryGroups[countryBase] = [];
-      // 记录国家出现的顺序
       if (!countryOrder[countryBase]) {
         countryOrder[countryBase] = Object.keys(countryOrder).length;
       }
@@ -333,22 +358,18 @@ function saveResults() {
     countryGroups[countryBase].push(item);
   });
 
-  // 按国家顺序排序（保持原来的顺序）
   const sortedCountries = Object.keys(countryGroups).sort((a, b) => {
     return (countryOrder[a] || 0) - (countryOrder[b] || 0);
   });
 
-  // 初始化计数器
   sortedCountries.forEach((country) => {
     countryCounters[country] = 1;
     top5Counters[country] = 1;
   });
 
-  // 按国家顺序生成数据
   sortedCountries.forEach((country) => {
     const countryItems = countryGroups[country];
 
-    // 生成该国家的所有数据
     countryItems.forEach((item) => {
       allData.push(
         `${item.ip}:${item.port}#${country}${countryCounters[country]}`,
@@ -356,7 +377,6 @@ function saveResults() {
       countryCounters[country]++;
     });
 
-    // 生成该国家的前5个数据
     countryItems.forEach((item, index) => {
       if (index < 5) {
         top5Data.push(
@@ -367,28 +387,22 @@ function saveResults() {
     });
   });
 
-  // 保存每个国家前5个到文件
   fs.writeFileSync("vless_top5.txt", top5Data.join("\n"), "utf8");
   console.log(
     `✅ 已保存每个国家前5个到 vless_top5.txt (${top5Data.length} 个)`,
   );
 
-  // 保存全部到文件
   fs.writeFileSync("vless_all.txt", allData.join("\n"), "utf8");
   console.log(`✅ 已保存全部通过IP到 vless_all.txt (${allData.length} 个)`);
 
-  // 保存详细测试结果
   saveDetailedResults(countryOrder);
 }
 
-// 保存详细的测试结果
 function saveDetailedResults(countryOrder) {
   const detailedData = [];
   const failedData = [];
 
-  // 收集通过的IP（按平均延迟排序）
   const passedIPs = [];
-
   Object.values(testResults).forEach((result) => {
     if (result.successes === TESTS_PER_IP) {
       passedIPs.push({
@@ -398,10 +412,8 @@ function saveDetailedResults(countryOrder) {
     }
   });
 
-  // 按平均延迟排序
   passedIPs.sort((a, b) => a.avgLatency - b.avgLatency);
 
-  // 按国家分组
   const countryGroups = {};
   passedIPs.forEach((item) => {
     const countryBase = item.location.replace(/\d+$/, "").trim();
@@ -411,21 +423,17 @@ function saveDetailedResults(countryOrder) {
     countryGroups[countryBase].push(item);
   });
 
-  // 按国家顺序排序（保持原来的顺序）
   const sortedCountries = Object.keys(countryGroups).sort((a, b) => {
     return (countryOrder[a] || 0) - (countryOrder[b] || 0);
   });
 
-  // 初始化计数器
   const tempCounters = {};
   sortedCountries.forEach((country) => {
     tempCounters[country] = 1;
   });
 
-  // 按国家顺序生成详细数据
   sortedCountries.forEach((country) => {
     const countryItems = countryGroups[country];
-
     countryItems.forEach((item) => {
       const latenciesStr = item.latencies.join(", ");
       detailedData.push(
@@ -436,44 +444,13 @@ function saveDetailedResults(countryOrder) {
     });
   });
 
-  // 处理失败的IP - 也按国家分组
-  const failedGroups = {};
   Object.values(testResults).forEach((result) => {
     if (result.successes < TESTS_PER_IP) {
       const countryBase = result.location.replace(/\d+$/, "").trim();
-      if (!failedGroups[countryBase]) {
-        failedGroups[countryBase] = [];
-      }
-      failedGroups[countryBase].push(result);
-    }
-  });
-
-  // 按国家顺序生成失败数据
-  const failedCounters = {};
-  sortedCountries.forEach((country) => {
-    if (failedGroups[country]) {
-      failedCounters[country] = 1;
-      failedGroups[country].forEach((item) => {
-        failedData.push(
-          `${item.ip}:${item.port}#${country}${failedCounters[country]} - ` +
-            `成功:${item.successes}/${TESTS_PER_IP}`,
-        );
-        failedCounters[country]++;
-      });
-    }
-  });
-
-  // 添加其他不在sortedCountries中的国家（如果有）
-  Object.keys(failedGroups).forEach((country) => {
-    if (!sortedCountries.includes(country)) {
-      failedCounters[country] = 1;
-      failedGroups[country].forEach((item) => {
-        failedData.push(
-          `${item.ip}:${item.port}#${country}${failedCounters[country]} - ` +
-            `成功:${item.successes}/${TESTS_PER_IP}`,
-        );
-        failedCounters[country]++;
-      });
+      failedData.push(
+        `${result.ip}:${result.port}#${countryBase} - ` +
+          `成功:${result.successes}/${TESTS_PER_IP}`,
+      );
     }
   });
 
@@ -488,7 +465,6 @@ function saveDetailedResults(countryOrder) {
   console.log(`✅ 已保存失败结果到 vless_failed.txt`);
 }
 
-// 主函数
 function main() {
   console.log("🚀 开始加载 IP 列表...");
   loadIpPortList("ip_all.txt");
@@ -499,7 +475,7 @@ function main() {
   );
 
   if (ipPortList.length > 0) {
-    console.log(""); // 空行
+    console.log("");
     startConcurrentTests();
   } else {
     console.log("❌ 没有找到可测试的 IP");
