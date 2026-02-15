@@ -119,7 +119,7 @@ jobs:
       - name: Build
         run: |
           echo "Building iptest-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext || '' }} from iptest.go..."
-          go build -o ${{ github.workspace }}/release_assets/iptest-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext || '' }} iptest.go
+          go build -o ${{ github.workspace }}/release_assets/iptest-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext || '' }} go/iptest.go
         env:
          GOARCH: ${{ matrix.goarch }}
          GOOS: ${{ matrix.goos }} 

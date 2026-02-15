@@ -5,7 +5,7 @@ import https from "https";
 import path from "path";
 
 // 输入CSV文件路径，包含代理IP和端口信息
-const IPS_CSV = "init.csv";
+const IPS_CSV = "../init.csv";
 
 // locations.json 文件路径，用于存储地理位置信息
 const LOCATIONS_JSON = "locations.json";
@@ -83,43 +83,23 @@ async function checkLocationsJson() {
   }
 }
 
-// 从 URL 下载 locations.json
+// 使用 fetch API 下载
 async function downloadLocationsJson() {
-  return new Promise((resolve, reject) => {
-    https
-      .get(LOCATIONS_URL, (response) => {
-        // 如果状态码不是 200，立即拒绝并退出
-        if (response.statusCode !== 200) {
-          console.log(`下载失败，HTTP 状态码: ${response.statusCode}`);
-          reject(new Error(`下载失败，HTTP 状态码: ${response.statusCode}`));
-          return;
-        } else {
-          let fileContent = "";
+  try {
+    const response = await fetch(LOCATIONS_URL);
 
-          // 监听数据流
-          response.on("data", (chunk) => {
-            fileContent += chunk;
-          });
+    if (!response.ok) {
+      throw new Error(`下载失败，HTTP 状态码: ${response.status}`);
+    }
 
-          response.on("end", () => {
-            // 如果文件内容为空，则不创建文件并返回错误
-            if (fileContent.trim() === "") {
-              console.log(`${LOCATIONS_JSON} 文件内容为空，未保存`);
-              reject(new Error("文件内容为空，未保存"));
-              return; // 防止继续创建文件
-            }
+    const buffer = await response.arrayBuffer();
+    const fileContent = Buffer.from(buffer);
 
-            // 如果文件内容有效时，创建文件并保存
-            fs.writeFileSync(LOCATIONS_JSON, fileContent, "utf8");
-            console.log(`${LOCATIONS_JSON} 下载并保存完成`);
-            resolve();
-          });
-        }
-      })
-      .on("error", (err) => {
-        reject(new Error(`下载过程中发生错误: ${err.message}`));
-      });
-  });
+    fs.writeFileSync(LOCATIONS_JSON, fileContent);
+    console.log(`${LOCATIONS_JSON} 下载并保存完成`);
+  } catch (error) {
+    throw new Error(`下载过程中发生错误: ${error.message}`);
+  }
 }
 /**
  * 自定义TCP/TLS连接池 - 暴力复用模式（终极修复版）

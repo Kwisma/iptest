@@ -7,13 +7,11 @@ const __filename = url.fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // 输入 CSV 文件路径
-const csvFilePath = path.resolve(__dirname, "init.csv");
+const csvFilePath = path.resolve(__dirname, "../init.csv");
 // 输出 TXT 文件路径
 const txtFilePath = path.resolve(__dirname, "ip.txt");
 
 // 提取列
-const ipcom = "IP地址";
-const portcom = "端口号";
 async function extractIpAndPort() {
   try {
     // 读取 CSV 文件内容
@@ -29,8 +27,12 @@ async function extractIpAndPort() {
 
     // 获取表头
     const headers = lines[0].split(",");
-    const ipIndex = headers.indexOf(ipcom);
-    const portIndex = headers.indexOf(portcom);
+    const ipIndex = headers.findIndex(
+      (h) => h.includes("IP") || h.includes("ip"),
+    );
+    const portIndex = headers.findIndex(
+      (h) => h.includes("端口") || h.includes("port"),
+    );
 
     if (ipIndex === -1 || portIndex === -1) {
       throw new Error(`CSV 文件缺少 ${ipcom} 或 ${portcom} 列`);
