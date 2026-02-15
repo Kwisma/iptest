@@ -118,7 +118,7 @@ function createWebSocketConnection(ip, port, location, testRound) {
   const ws = new WebSocket(wsUrl, {
     headers: params.headers,
     createConnection: () => tls.connect(tlsOptions),
-    timeout: 5000,
+    timeout: 2000,
   });
 
   let sendTime;
@@ -137,7 +137,7 @@ function createWebSocketConnection(ip, port, location, testRound) {
         handleTestCompletion(ip, port, location, false, testRound);
       }
     }
-  }, 5000);
+  }, 2000);
 
   function cleanup() {
     if (timeoutId) {
