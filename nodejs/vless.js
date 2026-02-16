@@ -43,8 +43,8 @@ const VLESS_CONFIG = {
  * @constant {number} RETRY_DELAY - 测试失败后的重试延迟（毫秒）
  */
 const MAX_CONCURRENT = 50;
-const TESTS_PER_IP = 4;
-const CONNECTION_TIMEOUT = 15000;
+const TESTS_PER_IP = 5;
+const CONNECTION_TIMEOUT = 2000;
 const RETRY_DELAY = 500;
 
 // ==================== 状态变量 ====================
