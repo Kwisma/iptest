@@ -671,17 +671,40 @@ function saveDetailedResults(countryOrder) {
       const latenciesStr = item.latencies.join(", ");
       detailedData.push(
         `${item.ip}:${item.port}#${country}${tempCounters[country]} - ` +
-          `${item.avgLatency}ms [${latenciesStr}]`,
+          `平均延迟: ${item.avgLatency}ms [${latenciesStr}]`,
       );
       tempCounters[country]++;
     });
   });
 
-  // 收集失败IP
+  // 收集失败IP（成功次数少于总测试次数）
   Object.values(testResults).forEach((result) => {
     if (result.successes < TESTS_PER_IP) {
-      failedData.push(`${result.ip}:${result.port}#${result.location}`);
+      // 计算部分成功的平均延迟
+      let avgLatencyStr = "N/A";
+      if (result.latencies.length > 0) {
+        const avgLatency = calculateAverage(result.latencies);
+        avgLatencyStr = `${avgLatency}ms`;
+      }
+      
+      // 获取成功测试的延迟列表
+      const latenciesStr = result.latencies.length > 0 
+        ? result.latencies.join(", ") 
+        : "无成功记录";
+      
+      failedData.push(
+        `${result.ip}:${result.port}#${result.location} - ` +
+        `成功: ${result.successes}/${TESTS_PER_IP}` +
+        `平均延迟: ${avgLatencyStr} [${latenciesStr}]`
+      );
     }
+  });
+
+  // 按成功率排序失败IP（成功率高的排在前面）
+  failedData.sort((a, b) => {
+    const successA = parseInt(a.match(/成功: (\d+)/)[1]);
+    const successB = parseInt(b.match(/成功: (\d+)/)[1]);
+    return successB - successA; // 降序排列
   });
 
   // 写入文件
@@ -692,8 +715,8 @@ function saveDetailedResults(countryOrder) {
   );
   fs.writeFileSync("vless_failed.txt", failedData.join("\n"), "utf8");
 
-  console.log(`✅ 已保存详细通过结果到 vless_passed_detailed.txt`);
-  console.log(`✅ 已保存失败结果到 vless_failed.txt`);
+  console.log(`✅ 已保存详细通过结果到 vless_passed_detailed.txt (${passedIPs.length}个完全通过IP)`);
+  console.log(`✅ 已保存失败结果到 vless_failed.txt (${Object.values(testResults).length - passedIPs.length}个部分成功/失败IP)`);
 }
 
 // ==================== 主函数 ====================
