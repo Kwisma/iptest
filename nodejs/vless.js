@@ -133,7 +133,7 @@ let nextTestIndex = 0; // 下一个待测试IP索引
  * @returns {Promise<Buffer|null>}
  */
 async function getECHConfig(domain) {
-  const url = `https://cloudflare-dns.com/dns-query?name=${domain}&type=HTTPS`;
+  const url = `https://doh.cmliussss.com/CMLiussss?name=${domain}&type=HTTPS`;
 
   return new Promise((resolve, reject) => {
     const req = https.get(
@@ -853,7 +853,7 @@ function saveResults() {
   );
 
   if (validCountries.length > 0) {
-    info(`\n${COLORS.brightCyan}各国通过IP数量(>=5):${COLORS.reset}`);
+    info(`${COLORS.brightCyan}各国通过IP数量(>=5):${COLORS.reset}`);
     validCountries.forEach(([country, items]) => {
       const avgCountryLatency = calculateAverage(
         items.map((i) => i.avgLatency),
@@ -912,7 +912,7 @@ async function main() {
   }
 
   info(
-    `${COLORS.green}开始测试 ${COLORS.brightWhite}${ipPortList.length}${COLORS.reset}${COLORS.green} 个目标...${COLORS.reset}\n`,
+    `${COLORS.green}开始测试 ${COLORS.brightWhite}${ipPortList.length}${COLORS.reset}${COLORS.green} 个目标...${COLORS.reset}`,
   );
 
   // 开始测试
