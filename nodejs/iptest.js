@@ -25,7 +25,35 @@
 import fs from "fs";
 import net from "net";
 import tls from "tls";
-import path from "path";
+
+// ============================================================================
+// 颜色定义
+// ============================================================================
+
+const COLORS = {
+  reset: "\x1b[0m",
+  bright: "\x1b[1m",
+  dim: "\x1b[2m",
+  
+  // 前景色
+  black: "\x1b[30m",
+  red: "\x1b[31m",
+  green: "\x1b[32m",
+  yellow: "\x1b[33m",
+  blue: "\x1b[34m",
+  magenta: "\x1b[35m",
+  cyan: "\x1b[36m",
+  white: "\x1b[37m",
+  
+  // 亮色
+  brightRed: "\x1b[91m",
+  brightGreen: "\x1b[92m",
+  brightYellow: "\x1b[93m",
+  brightBlue: "\x1b[94m",
+  brightMagenta: "\x1b[95m",
+  brightCyan: "\x1b[96m",
+  brightWhite: "\x1b[97m",
+};
 
 // ============================================================================
 // 配置常量模块
@@ -65,200 +93,106 @@ const TCP_TIMEOUT_MS = 2000;
 const TLS_TIMEOUT_MS = 2000;
 
 // ============================================================================
-// 日志系统模块
+// 日志系统
 // ============================================================================
 
-/** 日志级别枚举 */
 const LOG_LEVELS = {
-  DEBUG: 0,   // 调试信息，最详细
-  INFO: 1,    // 普通信息
-  WARN: 2,    // 警告信息
-  ERROR: 3,   // 错误信息
-  NONE: 4     // 不输出日志
+  debug: 0,
+  info: 1,
+  error: 2
 };
 
-/** 当前日志级别（可修改） */
-let CURRENT_LOG_LEVEL = LOG_LEVELS.INFO;
+/** 当前日志级别，可根据需要修改 */
+const currentLogLevel = LOG_LEVELS.info;
 
-/** 是否启用颜色输出 */
-const ENABLE_COLORS = true;
-
-/** ANSI颜色代码 */
-const COLORS = {
-  reset: "\x1b[0m",
-  bright: "\x1b[1m",
-  dim: "\x1b[2m",
-  underscore: "\x1b[4m",
-  blink: "\x1b[5m",
-  reverse: "\x1b[7m",
-  hidden: "\x1b[8m",
+/**
+ * 带颜色的日志输出
+ * @param {string} level - 日志级别
+ * @param {string} message - 日志内容
+ * @param {Object} data - 附加数据
+ */
+function log(level, message, data = null) {
+  if (LOG_LEVELS[level] < currentLogLevel) return;
   
-  // 前景色
-  black: "\x1b[30m",
-  red: "\x1b[31m",
-  green: "\x1b[32m",
-  yellow: "\x1b[33m",
-  blue: "\x1b[34m",
-  magenta: "\x1b[35m",
-  cyan: "\x1b[36m",
-  white: "\x1b[37m",
+  const timestamp = new Date().toISOString().slice(11, 19);
+  let colorPrefix = '';
   
-  // 背景色
-  bgBlack: "\x1b[40m",
-  bgRed: "\x1b[41m",
-  bgGreen: "\x1b[42m",
-  bgYellow: "\x1b[43m",
-  bgBlue: "\x1b[44m",
-  bgMagenta: "\x1b[45m",
-  bgCyan: "\x1b[46m",
-  bgWhite: "\x1b[47m"
-};
-
-/**
- * 获取当前时间字符串 [HH:MM:SS]
- * @returns {string} 格式化的时间字符串
- */
-const getTimestamp = () => {
-  const now = new Date();
-  const hours = String(now.getHours()).padStart(2, '0');
-  const minutes = String(now.getMinutes()).padStart(2, '0');
-  const seconds = String(now.getSeconds()).padStart(2, '0');
-  return `[${hours}:${minutes}:${seconds}]`;
-};
-
-/**
- * 颜色化日志工具函数
- * @param {string} text - 要输出的文本
- * @param {string} color - 颜色代码
- * @returns {string} 带颜色的文本
- */
-const colorize = (text, color) => {
-  if (!ENABLE_COLORS) return text;
-  return `${color}${text}${COLORS.reset}`;
-};
-
-/**
- * 日志记录器对象
- * 提供不同级别的日志输出方法
- */
-const logger = {
-  /**
-   * 设置日志级别
-   * @param {number} level - 日志级别
-   */
-  setLevel(level) {
-    CURRENT_LOG_LEVEL = level;
-  },
-
-  /**
-   * 调试日志 - 最详细的运行信息
-   * @param {string} message - 日志消息
-   * @param {any} data - 附加数据（可选）
-   */
-  debug(message, data = null) {
-    if (CURRENT_LOG_LEVEL <= LOG_LEVELS.DEBUG) {
-      const timestamp = colorize(getTimestamp(), COLORS.cyan);
-      const level = colorize('[DEBUG]', COLORS.cyan);
-      // 消息文本无颜色
-      console.log(`${timestamp} ${level} ${message}`);
-      if (data) console.log(data);
-    }
-  },
-
-  /**
-   * 信息日志 - 正常的运行信息
-   * @param {string} message - 日志消息
-   * @param {any} data - 附加数据（可选）
-   */
-  info(message, data = null) {
-    if (CURRENT_LOG_LEVEL <= LOG_LEVELS.INFO) {
-      const timestamp = colorize(getTimestamp(), COLORS.green);
-      const level = colorize('[INFO] ', COLORS.green);
-      // 消息文本无颜色
-      console.log(`${timestamp} ${level} ${message}`);
-      if (data) console.log(data);
-    }
-  },
-
-  /**
-   * 警告日志 - 需要注意但非错误的情况
-   * @param {string} message - 日志消息
-   * @param {any} data - 附加数据（可选）
-   */
-  warn(message, data = null) {
-    if (CURRENT_LOG_LEVEL <= LOG_LEVELS.WARN) {
-      const timestamp = colorize(getTimestamp(), COLORS.yellow);
-      const level = colorize('[WARN] ', COLORS.yellow);
-      // 消息文本无颜色
-      console.log(`${timestamp} ${level} ${message}`);
-      if (data) console.log(data);
-    }
-  },
-
-  /**
-   * 错误日志 - 发生错误的情况
-   * @param {string} message - 日志消息
-   * @param {any} data - 附加数据（可选）
-   */
-  error(message, data = null) {
-    if (CURRENT_LOG_LEVEL <= LOG_LEVELS.ERROR) {
-      const timestamp = colorize(getTimestamp(), COLORS.red);
-      const level = colorize('[ERROR]', COLORS.red);
-      // 消息文本无颜色
-      console.error(`${timestamp} ${level} ${message}`);
-      if (data) console.error(data);
-    }
-  },
-
-  /**
-   * 进度日志 - 进度信息显示
-   * @param {string} message - 进度消息
-   */
-  progress(message) {
-    if (CURRENT_LOG_LEVEL <= LOG_LEVELS.INFO) {
-      const timestamp = colorize(getTimestamp(), COLORS.magenta);
-      const level = colorize('[INFO] ', COLORS.magenta);
-      // 只有进度消息文本有颜色
-      const coloredMessage = colorize(`📊 ${message}`, COLORS.magenta);
-      console.log(`${timestamp} ${level}${coloredMessage}`);
-    }
-  },
-
-  /**
-   * 成功日志 - 操作成功的提示
-   * @param {string} message - 成功消息
-   */
-  success(message) {
-    if (CURRENT_LOG_LEVEL <= LOG_LEVELS.INFO) {
-      const timestamp = colorize(getTimestamp(), COLORS.green);
-      const level = colorize('[INFO] ', COLORS.green);
-      // 只有成功消息文本有颜色
-      const coloredMessage = colorize(`✅ ${message}`, COLORS.green);
-      console.log(`${timestamp} ${level}${coloredMessage}`);
-    }
-  },
-
-  /**
-   * 失败日志 - 操作失败的提示
-   * @param {string} message - 失败消息
-   */
-  fail(message) {
-    if (CURRENT_LOG_LEVEL <= LOG_LEVELS.INFO) {
-      const timestamp = colorize(getTimestamp(), COLORS.red);
-      const level = colorize('[INFO] ', COLORS.red);
-      // 只有失败消息文本有颜色
-      const coloredMessage = colorize(`❌ ${message}`, COLORS.red);
-      console.log(`${timestamp} ${level}${coloredMessage}`);
-    }
-  },
-
-  /**
-   * 原始输出（不带时间戳和级别，用于特殊格式）
-   * @param {string} message - 要输出的消息
-   */
-  raw(message) {
-    console.log(message);
+  // 根据级别设置颜色
+  switch(level) {
+    case 'debug':
+      colorPrefix = COLORS.dim + COLORS.cyan;
+      break;
+    case 'info':
+      colorPrefix = COLORS.bright + COLORS.green;
+      break;
+    case 'error':
+      colorPrefix = COLORS.bright + COLORS.red;
+      break;
+    default:
+      colorPrefix = COLORS.reset;
   }
+  
+  const prefix = `${COLORS.dim}[${timestamp}]${COLORS.reset} ${colorPrefix}[${level.toUpperCase()}]${COLORS.reset}`;
+  
+  if (data) {
+    console.log(`${prefix} ${message}`, data);
+  } else {
+    console.log(`${prefix} ${message}`);
+  }
+}
+
+/** 调试日志函数 */
+const debug = (msg, data) => log('debug', msg, data);
+
+/** 信息日志函数 */
+const info = (msg, data) => log('info', msg, data);
+
+/** 错误日志函数 */
+const error = (msg, data) => log('error', msg, data);
+
+/**
+ * 成功日志 - 操作成功的提示
+ * @param {string} message - 成功消息
+ */
+const success = (message) => {
+  const timestamp = new Date().toISOString().slice(11, 19);
+  const prefix = `${COLORS.dim}[${timestamp}]${COLORS.reset} ${COLORS.bright + COLORS.green}[INFO]${COLORS.reset}`;
+  console.log(`${prefix} ${COLORS.brightGreen}✅ ${message}${COLORS.reset}`);
+};
+
+/**
+ * 失败日志 - 操作失败的提示
+ * @param {string} message - 失败消息
+ */
+const fail = (message) => {
+  const timestamp = new Date().toISOString().slice(11, 19);
+  const prefix = `${COLORS.dim}[${timestamp}]${COLORS.reset} ${COLORS.bright + COLORS.red}[INFO]${COLORS.reset}`;
+  console.log(`${prefix} ${COLORS.brightRed}❌ ${message}${COLORS.reset}`);
+};
+
+/**
+ * 进度日志 - 进度信息显示
+ * @param {string} message - 进度消息
+ */
+const progress = (message) => {
+  const timestamp = new Date().toISOString().slice(11, 19);
+  const prefix = `${COLORS.dim}[${timestamp}]${COLORS.reset} ${COLORS.bright + COLORS.magenta}[INFO]${COLORS.reset}`;
+  console.log(`${prefix} ${COLORS.brightMagenta}📊 ${message}${COLORS.reset}`);
+};
+
+/**
+ * 标题输出（不带时间戳，用于程序开头）
+ * @param {string} message - 标题消息
+ */
+const title = (message) => {
+  console.log(`${COLORS.bright}${message}${COLORS.reset}`);
+};
+
+/**
+ * 分隔线输出
+ */
+const separator = () => {
+  console.log(COLORS.dim + "=".repeat(70) + COLORS.reset);
 };
 
 // ============================================================================
@@ -291,14 +225,14 @@ const isIgnorableError = (error) => {
 // 处理未捕获的异常
 process.on("uncaughtException", (error) => {
   if (isIgnorableError(error)) return;
-  logger.error(`未捕获的异常: ${error.message}`);
-  logger.debug(error.stack);
+  error(`未捕获的异常: ${error.message}`);
+  debug(error.stack);
 });
 
 // 处理未处理的Promise拒绝
 process.on("unhandledRejection", (reason) => {
   if (isIgnorableError(reason)) return;
-  logger.error(`未处理的Promise拒绝: ${reason}`);
+  error(`未处理的Promise拒绝: ${reason}`);
 });
 
 // ============================================================================
@@ -311,9 +245,9 @@ process.on("unhandledRejection", (reason) => {
 async function checkLocationsJson() {
   try {
     await fs.promises.access(LOCATIONS_JSON);
-    logger.info(`${LOCATIONS_JSON} 文件已存在`);
+    info(`${LOCATIONS_JSON} 文件已存在`);
   } catch (error) {
-    logger.warn(`${LOCATIONS_JSON} 文件不存在，正在下载...`);
+    info(`${LOCATIONS_JSON} 文件不存在，正在下载...`);
     await downloadLocationsJson();
   }
 }
@@ -331,7 +265,7 @@ async function downloadLocationsJson() {
 
     const buffer = await response.arrayBuffer();
     fs.writeFileSync(LOCATIONS_JSON, Buffer.from(buffer));
-    logger.success(`${LOCATIONS_JSON} 下载并保存完成`);
+    success(`${LOCATIONS_JSON} 下载并保存完成`);
   } catch (error) {
     throw new Error(`下载过程中发生错误: ${error.message}`);
   }
@@ -357,11 +291,11 @@ async function readLocationsJson() {
       }
     });
 
-    logger.info(`加载完成: ${LOCATIONS_JSON} (${coloMap.size}个数据中心)`);
-    logger.debug(`COLO列表: ${Array.from(coloMap.keys()).join(', ')}`);
+    info(`加载完成: ${LOCATIONS_JSON} (${coloMap.size}个数据中心)`);
+    debug(`COLO列表: ${Array.from(coloMap.keys()).join(', ')}`);
     return coloMap;
   } catch (error) {
-    logger.error(`读取失败 ${LOCATIONS_JSON}: ${error.message}`);
+    error(`读取失败 ${LOCATIONS_JSON}: ${error.message}`);
     process.exit(1);
   }
 }
@@ -396,7 +330,7 @@ async function readIpsCsv() {
       throw new Error("CSV文件中未找到IP地址或端口号列");
     }
 
-    logger.debug(`解析CSV: IP列[${ipIndex}], 端口列[${portIndex}]`);
+    debug(`解析CSV: IP列[${ipIndex}], 端口列[${portIndex}]`);
 
     const proxyList = [];
     for (let i = 1; i < lines.length; i++) {
@@ -408,16 +342,16 @@ async function readIpsCsv() {
         if (ip && port && net.isIP(ip) && !isNaN(parseInt(port))) {
           proxyList.push(`${ip}:${port}`);
         } else {
-          logger.debug(`跳过无效行 ${i+1}: IP=${ip}, Port=${port}`);
+          debug(`跳过无效行 ${i+1}: IP=${ip}, Port=${port}`);
         }
       }
     }
 
-    logger.info(`加载完成: ${proxyList.length} 个IP (共${lines.length-1}行)`);
-    logger.debug(`IP列表: ${proxyList.slice(0, 5).join(', ')}${proxyList.length > 5 ? '...' : ''}`);
+    info(`加载完成: ${proxyList.length} 个IP (共${lines.length-1}行)`);
+    debug(`IP列表: ${proxyList.slice(0, 5).join(', ')}${proxyList.length > 5 ? '...' : ''}`);
     return proxyList;
   } catch (error) {
-    logger.error(`读取失败 ${IPS_CSV}: ${error.message}`);
+    error(`读取失败 ${IPS_CSV}: ${error.message}`);
     process.exit(1);
   }
 }
@@ -455,7 +389,7 @@ class ConnectionPool {
       errors: 0,    // 错误次数
     };
     
-    logger.debug("连接池初始化完成");
+    debug("连接池初始化完成");
   }
 
   /**
@@ -473,17 +407,17 @@ class ConnectionPool {
     if (conn && !conn.socket.destroyed) {
       conn.lastUsed = Date.now();
       this.stats.hits++;
-      logger.debug(`连接池命中: ${key}`);
+      debug(`连接池命中: ${key}`);
 
       // 如果需要TLS但当前只有TCP连接，升级连接
       if (useTLS && !conn.tlsSocket) {
-        logger.debug(`升级连接到TLS: ${key}`);
+        debug(`升级连接到TLS: ${key}`);
         try {
           conn.tlsSocket = await this.upgradeToTLS(conn.socket);
         } catch (error) {
           this.stats.errors++;
           this.connections.delete(key);
-          logger.debug(`TLS升级失败: ${key} - ${error.message}`);
+          debug(`TLS升级失败: ${key} - ${error.message}`);
           throw error;
         }
       }
@@ -493,7 +427,7 @@ class ConnectionPool {
 
     // 未命中，创建新连接
     this.stats.misses++;
-    logger.debug(`连接池未命中，创建新连接: ${key}`);
+    debug(`连接池未命中，创建新连接: ${key}`);
 
     try {
       const socket = await this.createTCPSocket(ip, port);
@@ -514,13 +448,13 @@ class ConnectionPool {
       // 限制连接池大小
       if (this.connections.size > this.maxPoolSize) {
         const closed = this.cleanup(true);
-        logger.debug(`连接池超过大小限制，清理了${closed}个连接`);
+        debug(`连接池超过大小限制，清理了${closed}个连接`);
       }
 
       return conn;
     } catch (error) {
       this.stats.errors++;
-      logger.debug(`创建连接失败: ${key} - ${error.message}`);
+      debug(`创建连接失败: ${key} - ${error.message}`);
       throw error;
     }
   }
@@ -646,7 +580,7 @@ class ConnectionPool {
     const conn = this.connections.get(key);
     if (conn) {
       conn.lastUsed = Date.now();
-      logger.debug(`释放连接: ${key}`);
+      debug(`释放连接: ${key}`);
     }
   }
 
@@ -674,7 +608,7 @@ class ConnectionPool {
         }
         this.connections.delete(key);
         closed++;
-        logger.debug(`清理连接: ${key} (空闲: ${isIdle}, 强制: ${needShrink})`);
+        debug(`清理连接: ${key} (空闲: ${isIdle}, 强制: ${needShrink})`);
       }
     }
 
@@ -689,13 +623,13 @@ class ConnectionPool {
     const count = this.cleanup(true);
     this.stats.closed += count;
 
-    logger.info("📊 连接池统计:");
-    logger.info(`  ✅ 命中: ${this.stats.hits}`);
-    logger.info(`  ❌ 未命中: ${this.stats.misses}`);
-    logger.info(`  📦 创建: ${this.stats.created}`);
-    logger.info(`  🗑️ 关闭: ${this.stats.closed}`);
-    logger.info(`  ⚠️ 错误: ${this.stats.errors}`);
-    logger.info(`  💾 剩余: ${this.connections.size}`);
+    info("📊 连接池统计:");
+    info(`  ✅ 命中: ${this.stats.hits}`);
+    info(`  ❌ 未命中: ${this.stats.misses}`);
+    info(`  📦 创建: ${this.stats.created}`);
+    info(`  🗑️ 关闭: ${this.stats.closed}`);
+    info(`  ⚠️ 错误: ${this.stats.errors}`);
+    info(`  💾 剩余: ${this.connections.size}`);
   }
 }
 
@@ -837,7 +771,7 @@ async function sendHttpRequest(socket, host, path = "/cdn-cgi/trace") {
 
     try {
       socket.write(request);
-      logger.debug(`发送HTTP请求到 ${host}${path}`);
+      debug(`发送HTTP请求到 ${host}${path}`);
     } catch (err) {
       cleanup();
       reject(new Error(`写入请求失败: ${err.message}`));
@@ -965,7 +899,7 @@ async function checkProxy(proxyAddress, coloMap, ipVersion = "all") {
     const { ip: outboundIp, colo } = extractFromTrace(traceData);
 
     if (!outboundIp) {
-      logger.debug(`${proxyAddress} 无IP信息 (${elapsed}ms)`);
+      debug(`${proxyAddress} 无IP信息 (${elapsed}ms)`);
       connectionPool.release(ip, port);
       return null;
     }
@@ -980,26 +914,26 @@ async function checkProxy(proxyAddress, coloMap, ipVersion = "all") {
 
     // IP版本过滤
     if (ipVersion === "ipv4" && isOutboundIPv6) {
-      logger.debug(`${proxyAddress} IPv6出口 ${countryDisplay} (${elapsed}ms) - 已过滤`);
+      debug(`${proxyAddress} IPv6出口 ${countryDisplay} (${elapsed}ms) - 已过滤`);
       connectionPool.release(ip, port);
       return null;
     }
 
     if (ipVersion === "ipv6" && !isOutboundIPv6) {
-      logger.debug(`${proxyAddress} IPv4出口 ${countryDisplay} (${elapsed}ms) - 已过滤`);
+      debug(`${proxyAddress} IPv4出口 ${countryDisplay} (${elapsed}ms) - 已过滤`);
       connectionPool.release(ip, port);
       return null;
     }
 
     // 验证位置信息
     if (!colo || !coloMap.has(colo)) {
-      logger.debug(`${proxyAddress} ${isOutboundIPv6 ? 'IPv6' : 'IPv4'}出口 ${countryDisplay} (${elapsed}ms) - 位置未知`);
+      debug(`${proxyAddress} ${isOutboundIPv6 ? 'IPv6' : 'IPv4'}出口 ${countryDisplay} (${elapsed}ms) - 位置未知`);
       connectionPool.release(ip, port);
       return null;
     }
 
     // 有效代理
-    logger.success(`${proxyAddress} ${isOutboundIPv6 ? 'IPv6' : 'IPv4'}出口 ${countryDisplay} (${elapsed}ms)`);
+    success(`${proxyAddress} ${isOutboundIPv6 ? 'IPv6' : 'IPv4'}出口 ${countryDisplay} (${elapsed}ms)`);
     connectionPool.release(ip, port);
 
     return {
@@ -1014,7 +948,7 @@ async function checkProxy(proxyAddress, coloMap, ipVersion = "all") {
     const elapsed = Date.now() - startTime;
 
     if (!error.message.includes("超时")) {
-      logger.debug(`${proxyAddress} 错误: ${error.message.substring(0, 30)} (${elapsed}ms)`);
+      debug(`${proxyAddress} 错误: ${error.message.substring(0, 30)} (${elapsed}ms)`);
     }
 
     if (hasConnection) connectionPool.release(ip, port);
@@ -1040,7 +974,7 @@ async function processBatch(items, concurrency, processor, coloMap) {
   let completed = 0;
   let currentIndex = 0;
 
-  logger.info(`🚀 开始检测 ${total} 个ProxyIP (并发${concurrency}, 连接池复用模式)`);
+  info(`🚀 开始检测 ${total} 个ProxyIP (并发${concurrency}, 连接池复用模式)`);
 
   const worker = async () => {
     while (true) {
@@ -1052,7 +986,7 @@ async function processBatch(items, concurrency, processor, coloMap) {
         const result = await processor(item, coloMap);
         if (result) results.push(result);
       } catch (error) {
-        logger.debug(`处理 ${item} 时发生错误: ${error.message}`);
+        debug(`处理 ${item} 时发生错误: ${error.message}`);
       }
 
       completed++;
@@ -1065,7 +999,7 @@ async function processBatch(items, concurrency, processor, coloMap) {
              (connectionPool.stats.hits + connectionPool.stats.misses)) * 100).toFixed(1)
           : "0.0";
 
-        logger.progress(
+        progress(
           `进度: ${completed}/${total} (${percent}%) | ` +
           `有效: ${results.length} | ` +
           `命中: ${hitRate}% | ` +
@@ -1099,17 +1033,17 @@ function printSummary(proxyAddresses, validProxies, elapsedTime) {
        (connectionPool.stats.hits + connectionPool.stats.misses)) * 100).toFixed(1)
     : "0.0";
 
-  logger.info("=".repeat(70));
-  logger.info("📊 检测完成统计");
-  logger.info("=".repeat(70));
-  logger.info(`  总 ProxyIP 数:     ${total}`);
-  logger.info(`  ✅ 可用:           ${valid} (${successRate}%)`);
-  logger.info(`  ❌ 无效:           ${invalid}`);
-  logger.info(`  ⏱️ 耗时:           ${elapsedTime.toFixed(1)}s`);
-  logger.info(`  ⚡ 平均速度:        ${(total / elapsedTime).toFixed(1)}个/秒`);
-  logger.info(`  🎯 连接池命中率:    ${hitRate}%`);
-  logger.info(`  💾 连接池大小:      ${connectionPool.connections.size}个`);
-  logger.info("=".repeat(70));
+  separator();
+  info("📊 检测完成统计");
+  separator();
+  info(`  总 ProxyIP 数:     ${total}`);
+  info(`  ✅ 可用:           ${valid} (${successRate}%)`);
+  info(`  ❌ 无效:           ${invalid}`);
+  info(`  ⏱️ 耗时:           ${elapsedTime.toFixed(1)}s`);
+  info(`  ⚡ 平均速度:        ${(total / elapsedTime).toFixed(1)}个/秒`);
+  info(`  🎯 连接池命中率:    ${hitRate}%`);
+  info(`  💾 连接池大小:      ${connectionPool.connections.size}个`);
+  separator();
 }
 
 /**
@@ -1120,7 +1054,7 @@ function startCleanupTimer() {
     const before = connectionPool.connections.size;
     const closed = connectionPool.cleanup();
     if (closed > 0) {
-      logger.debug(`连接池清理: ${before} → ${connectionPool.connections.size} (关闭${closed}个空闲连接)`);
+      debug(`连接池清理: ${before} → ${connectionPool.connections.size} (关闭${closed}个空闲连接)`);
     }
   }, 10000);
 }
@@ -1134,11 +1068,11 @@ function startCleanupTimer() {
  */
 async function main() {
   // 显示程序标题
-  logger.raw("");
-  logger.raw(colorize("=".repeat(70), COLORS.bright));
-  logger.raw(colorize("🚀 Cloudflare CDN ProxyIP 检测工具 v4.0 - 连接池复用模式", COLORS.bright));
-  logger.raw(colorize("=".repeat(70), COLORS.bright));
-  logger.raw("");
+  console.log("");
+  title("=".repeat(70));
+  title("🚀 Cloudflare CDN ProxyIP 检测工具 v4.0 - 连接池复用模式");
+  title("=".repeat(70));
+  console.log("");
 
   const startTime = Date.now();
 
@@ -1147,11 +1081,11 @@ async function main() {
     startCleanupTimer();
 
     // 读取CSV文件
-    logger.info("📖 读取配置文件...");
+    info("📖 读取配置文件...");
     const proxyAddresses = await readIpsCsv();
 
     if (proxyAddresses.length === 0) {
-      logger.warn("⚠️ 没有IP地址，程序退出");
+      info("⚠️ 没有IP地址，程序退出");
       return;
     }
 
@@ -1189,43 +1123,43 @@ async function main() {
     if (allProxies.length > 0) {
       // 保存全部代理
       await fs.promises.writeFile(OUTPUT_ALL, allProxies.join("\n"), "utf8");
-      logger.success(`已保存: ${OUTPUT_ALL} (全部代理, ${allProxies.length}条)`);
+      success(`已保存: ${OUTPUT_ALL} (全部代理, ${allProxies.length}条)`);
 
       // 保存每个国家前N个代理
       await fs.promises.writeFile(OUTPUT_FILE, limitedProxies.join("\n"), "utf8");
-      logger.success(`已保存: ${OUTPUT_FILE} (每个国家前${LIMIT_PER_COUNTRY}个, ${limitedProxies.length}条)`);
+      success(`已保存: ${OUTPUT_FILE} (每个国家前${LIMIT_PER_COUNTRY}个, ${limitedProxies.length}条)`);
 
       // 按国家分组统计
       const groups = groupByCountry(validProxyObjects);
-      logger.info("📊 各国代理数量:");
+      info("\n📊 各国代理数量:");
       Object.keys(groups).sort().forEach((country) => {
         const count = groups[country].length;
         const emoji = groups[country][0]?.emoji || "";
         if (count >= LIMIT_PER_COUNTRY) {
-          logger.info(`  ✅ ${emoji} ${country}: 共${count}个 (输出前${LIMIT_PER_COUNTRY}个)`);
+          info(`  ✅ ${emoji} ${country}: 共${count}个 (输出前${LIMIT_PER_COUNTRY}个)`);
         } else {
-          logger.info(`  ⚠️ ${emoji} ${country}: 共${count}个 (数量不足${LIMIT_PER_COUNTRY}，不输出)`);
+          info(`  ⚠️ ${emoji} ${country}: 共${count}个 (数量不足${LIMIT_PER_COUNTRY}，不输出)`);
         }
       });
 
       // 显示前10个可用代理
-      logger.info(`📋 前10个可用ProxyIP（每个国家前${LIMIT_PER_COUNTRY}个）:`);
+      info(`\n📋 前10个可用ProxyIP（每个国家前${LIMIT_PER_COUNTRY}个）:`);
       limitedProxies.slice(0, 10).forEach((proxy, index) => {
-        logger.info(`  ${index + 1}. ${proxy}`);
+        info(`  ${index + 1}. ${proxy}`);
       });
 
       if (limitedProxies.length > 10) {
-        logger.info(`  ... 共${limitedProxies.length}条`);
+        info(`  ... 共${limitedProxies.length}条`);
       }
     } else {
-      logger.warn("⚠️ 未找到可用ProxyIP，不保存文件");
+      info("\n⚠️ 未找到可用ProxyIP，不保存文件");
     }
 
-    logger.info("✨ 检测完成");
+    success("\n✨ 检测完成\n");
     process.exit(0);
   } catch (error) {
-    logger.error(`❌ 程序异常: ${error.message}`);
-    logger.debug(error.stack);
+    error(`\n❌ 程序异常: ${error.message}`);
+    debug(error.stack);
     process.exit(1);
   }
 }
