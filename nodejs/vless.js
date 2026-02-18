@@ -69,7 +69,7 @@ const LOG_LEVELS = {
   error: 2,
 };
 
-const currentLogLevel = LOG_LEVELS[TEST_CONFIG.LOG_LEVEL] || 1;
+const currentLogLevel = LOG_LEVELS[TEST_CONFIG.LOG_LEVEL];
 
 /**
  * 带颜色的日志输出
