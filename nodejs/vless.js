@@ -569,7 +569,7 @@ function testConnection(target, testRound) {
       if (result.successes === 0) statusColor = COLORS.red;
       else if (result.successes < TEST_CONFIG.TESTS_PER_IP)
         statusColor = COLORS.yellow;
-
+/**
       info(
         `${COLORS.bright}${statusColor}═══════════════════════════════════════${COLORS.reset}`,
       );
@@ -581,7 +581,7 @@ function testConnection(target, testRound) {
       );
       info(
         `${COLORS.bright}${statusColor}═══════════════════════════════════════${COLORS.reset}`,
-      );
+      );*/
     } else {
       // 安排下一次测试
       setTimeout(() => {
