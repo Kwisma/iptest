@@ -52,8 +52,8 @@ type result struct {
 	emoji       string        // 国旗
 	latency     string        // 延迟
 	tcpDuration time.Duration // TCP请求延迟
-	// 新增字段
 	outboundIP  string // 出站IP
+	ipType      string // IP类型 (IPv4/IPv6)
 	visitScheme string // 访问协议
 	tlsVersion  string // TLS版本
 	sni         string // SNI
@@ -304,6 +304,8 @@ func main() {
 
 					// 记录通过延迟检查的有效IP
 					atomic.AddInt32(&validCount, 1)
+					outboundIP := responseData["ip"]
+					ipType := getIPType(outboundIP)
 
 					// 创建result对象，包含所有新字段
 					res := result{
@@ -313,8 +315,8 @@ func main() {
 						locCode:     locCode,
 						latency:     fmt.Sprintf("%d ms", tcpDuration.Milliseconds()),
 						tcpDuration: tcpDuration,
-						// 新增字段
-						outboundIP:  responseData["ip"],
+						outboundIP:  outboundIP,
+						ipType:      ipType,
 						visitScheme: responseData["visit_scheme"],
 						tlsVersion:  responseData["tls"],
 						sni:         responseData["sni"],
@@ -333,8 +335,8 @@ func main() {
 						res.country = loc.Country
 						res.city_zh = loc.City_zh
 						res.emoji = loc.Emoji
-						fmt.Printf("发现有效IP %s 端口 %d 位置信息 %s 出站IP %s 延迟 %d 毫秒\n",
-							ipAddr, port, loc.City_zh, responseData["ip"], tcpDuration.Milliseconds())
+						fmt.Printf("发现有效IP %s 端口 %d 位置信息 %s 出站IP %s (%s) 延迟 %d 毫秒\n",
+							ipAddr, port, loc.City_zh, outboundIP, ipType, tcpDuration.Milliseconds())
 						// 输出完整的响应内容
 						// fmt.Printf("========== Cloudflare Trace 响应 ==========\n")
 						// fmt.Printf("IP地址: %s 端口: %d\n", ipAddr, port)
@@ -342,8 +344,8 @@ func main() {
 						// fmt.Printf("==========================================\n\n")
 
 					} else {
-						fmt.Printf("发现有效IP %s 端口 %d 位置信息未知 出站IP %s 延迟 %d 毫秒\n",
-							ipAddr, port, responseData["ip"], tcpDuration.Milliseconds())
+						fmt.Printf("发现有效IP %s 端口 %d 位置信息未知 出站IP %s (%s) 延迟 %d 毫秒\n",
+							ipAddr, port, outboundIP, ipType, tcpDuration.Milliseconds())
 					}
 
 					resultChan <- res
@@ -424,7 +426,7 @@ func main() {
 			"IP地址", "端口号", "TLS", "数据中心", "源IP位置",
 			"地区", "城市", "地区(中文)", "国家", "城市(中文)", "国旗",
 			"网络延迟", "下载速度",
-			"出站IP", "访问协议", "TLS版本", "SNI", "HTTP版本",
+			"出站IP", "IP类型", "访问协议", "TLS版本", "SNI", "HTTP版本",
 			"WARP", "Gateway", "RBI", "密钥交换", "时间戳",
 		})
 	} else {
@@ -432,7 +434,7 @@ func main() {
 			"IP地址", "端口号", "TLS", "数据中心", "源IP位置",
 			"地区", "城市", "地区(中文)", "国家", "城市(中文)", "国旗",
 			"网络延迟",
-			"出站IP", "访问协议", "TLS版本", "SNI", "HTTP版本",
+			"出站IP", "IP类型", "访问协议", "TLS版本", "SNI", "HTTP版本",
 			"WARP", "Gateway", "RBI", "密钥交换", "时间戳",
 		})
 	}
@@ -454,8 +456,8 @@ func main() {
 				res.result.emoji,
 				res.result.latency,
 				fmt.Sprintf("%.0f kB/s", res.downloadSpeed),
-				// 新增字段
 				res.result.outboundIP,
+				res.result.ipType,
 				res.result.visitScheme,
 				res.result.tlsVersion,
 				res.result.sni,
@@ -480,8 +482,8 @@ func main() {
 				res.result.city_zh,
 				res.result.emoji,
 				res.result.latency,
-				// 新增字段
 				res.result.outboundIP,
+				res.result.ipType,
 				res.result.visitScheme,
 				res.result.tlsVersion,
 				res.result.sni,
@@ -616,4 +618,17 @@ func parseTraceResponse(body string) map[string]string {
 		}
 	}
 	return result
+}
+func getIPType(ip string) string {
+    if ip == "" {
+        return "未知"
+    }
+    parsedIP := net.ParseIP(ip)
+    if parsedIP == nil {
+        return "无效IP"
+    }
+    if parsedIP.To4() != nil {
+        return "IPv4"
+    }
+    return "IPv6"
 }
