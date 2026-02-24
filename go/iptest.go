@@ -554,6 +554,7 @@ func getDownloadSpeed(ip string, port int) float64 {
 	// 创建请求
 	req, _ := http.NewRequest("GET", speedTestURL, nil)
 	req.Header.Set("User-Agent", "Mozilla/5.0")
+	req.Header.Set("Referer", "https://speed.cloudflare.com/")
 
 	// 创建TCP连接
 	dialer := &net.Dialer{
