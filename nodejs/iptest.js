@@ -532,7 +532,7 @@ async function getDownloadSpeed(ip, port) {
                     const duration = (Date.now() - startTime) / 1000;
                     const speed = (downloadedBytes / duration) / 1024;
                     
-                    console.log(`IP ${ip} 端口 ${port} 测速超时，速度 ${speed.toFixed(0)} kB/s`);
+                    console.log(`IP ${ip} 端口 ${port} 速度 ${speed.toFixed(0)} kB/s`);
                     cleanup();
                     resolve(speed);
                 }
