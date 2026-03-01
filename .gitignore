@@ -4,6 +4,7 @@ data.json
 init.csv
 locations.json
 ip.txt
+ip.csv
 ip_tq.csv
 ip_*.txt
 package-lock.json

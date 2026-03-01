@@ -11,21 +11,17 @@ log() {
 
 # 执行 iptest.js
 log "INFO" "开始执行 iptest.js"
-if node iptest.js; then
+if node iptest.js --file ../init.csv --speedtest 0; then
     log "INFO" "iptest.js 执行成功"
 else
     log "ERROR" "iptest.js 执行失败"
     exit 1
 fi
 
-
-# 执行 vless.js
-log "INFO" "开始执行 vless.js"
-if node vless.js; then
-    log "INFO" "vless.js 执行成功"
+log "INFO" "开始执行 ip_tq.js"
+if node ip_tq.js; then
+    log "INFO" "ip_tq.js 执行成功"
 else
-    log "ERROR" "vless.js 执行失败"
+    log "ERROR" "ip_tq.js 执行失败"
     exit 1
 fi
-
-log "INFO" "所有脚本执行完毕"

@@ -569,7 +569,7 @@ function testConnection(target, testRound) {
       if (result.successes === 0) statusColor = COLORS.red;
       else if (result.successes < TEST_CONFIG.TESTS_PER_IP)
         statusColor = COLORS.yellow;
-/**
+      /**
       info(
         `${COLORS.bright}${statusColor}═══════════════════════════════════════${COLORS.reset}`,
       );
@@ -869,12 +869,6 @@ function saveResults() {
 
 // ==================== 程序入口 ====================
 
-/**
- * 主函数
- */
-/**
- * 主函数
- */
 async function main() {
   console.log(
     `\n${COLORS.bright}${COLORS.cyan}🚀 VLESS 代理测试工具 v3.0.0${COLORS.reset}\n`,

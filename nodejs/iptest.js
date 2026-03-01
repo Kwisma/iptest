@@ -1,1214 +1,748 @@
-/**
- * ============================================================================
- * Cloudflare CDN ProxyIP 检测工具 v4.0
- * ============================================================================
- *
- * 功能说明：
- * 1. 从CSV文件读取代理IP列表
- * 2. 检测每个代理IP是否可用（通过请求 Cloudflare 的 /cdn-cgi/trace 接口）
- * 3. 获取出口IP的地理位置信息
- * 4. 按国家分组并输出结果
- *
- * 核心特性：
- * - 连接池复用：大幅提升检测效率
- * - 并发控制：避免系统负载过高
- * - 自动重连：支持TCP/TLS连接复用
- * - 智能过滤：按IP版本（IPv4/IPv6）筛选
- * - 国家分组：每个国家输出指定数量的代理
- *
- * 作者：优化版
- * 版本：v4.0
- * 最后更新：2024
- * ============================================================================
- */
 
-import fs from "fs";
-import net from "net";
-import tls from "tls";
+import fs from 'fs';
+import net from 'net';
+import tls from 'tls';
+import http from 'http';
+import https from 'https';
+import readline from 'readline';
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
 
-// ============================================================================
-// 颜色定义
-// ============================================================================
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
-const COLORS = {
-  reset: "\x1b[0m",
-  bright: "\x1b[1m",
-  dim: "\x1b[2m",
+// 配置常量
+const REQUEST_URL = 'speed.cloudflare.com/cdn-cgi/trace';
+const TIMEOUT = 1000; // 1秒
+const MAX_DURATION = 2000; // 2秒
 
-  // 前景色
-  black: "\x1b[30m",
-  red: "\x1b[31m",
-  green: "\x1b[32m",
-  yellow: "\x1b[33m",
-  blue: "\x1b[34m",
-  magenta: "\x1b[35m",
-  cyan: "\x1b[36m",
-  white: "\x1b[37m",
-
-  // 亮色
-  brightRed: "\x1b[91m",
-  brightGreen: "\x1b[92m",
-  brightYellow: "\x1b[93m",
-  brightBlue: "\x1b[94m",
-  brightMagenta: "\x1b[95m",
-  brightCyan: "\x1b[96m",
-  brightWhite: "\x1b[97m",
+// 命令行参数
+const options = {
+    file: '../init.csv',
+    outfile: 'ip.csv',
+    maxThreads: 100,
+    speedtest: 5,
+    url: 'speed.cloudflare.com/__down?bytes=500000000',
+    tls: true,
+    delay: 0
 };
 
-// ============================================================================
-// 配置常量模块
-// ============================================================================
+// 全局变量
+let locations = [];
+let locationMap = new Map();
+let validCount = 0;
+let startTime = Date.now();
 
-/** 输入CSV文件路径，包含代理IP和端口信息 */
-const IPS_CSV = "../init.csv";
-
-/** locations.json 文件路径，用于存储地理位置信息 */
-const LOCATIONS_JSON = "locations.json";
-
-/** 输出文件路径，保存每个国家前LIMIT_PER_COUNTRY个有效代理IP */
-const OUTPUT_FILE = "ip_top5.txt";
-
-/** 输出文件路径，保存所有有效代理IP（不限制数量） */
-const OUTPUT_ALL = "ip_all.txt";
-
-/** 设置代理IP的类型，支持 'ipv4'、'ipv6' 和 'all' */
-const OUTPUT_TYPE = "ipv4";
-
-/** 从哪里下载locations.json文件 */
-const LOCATIONS_URL = "https://locations-adw.pages.dev";
-
-/** 每个国家输出的代理数量 */
-const LIMIT_PER_COUNTRY = 5;
-
-/** 控制并发请求的最大数量，避免过高的并发造成负载过大 */
-const CONCURRENCY_LIMIT = 200;
-
-/** HTTP请求的超时设置，单位为毫秒 */
-const TIMEOUT_MS = 3000;
-
-/** TCP连接的超时时间，单位为毫秒 */
-const TCP_TIMEOUT_MS = 2000;
-
-/** TLS连接的超时时间，单位为毫秒 */
-const TLS_TIMEOUT_MS = 2000;
-
-// ============================================================================
-// 日志系统
-// ============================================================================
-
-const LOG_LEVELS = {
-  debug: 0,
-  info: 1,
-  error: 2,
-};
-
-/** 当前日志级别，可根据需要修改 */
-const currentLogLevel = LOG_LEVELS.info;
-
-/**
- * 带颜色的日志输出
- * @param {string} level - 日志级别
- * @param {string} message - 日志内容
- * @param {Object} data - 附加数据
- */
-function log(level, message, data = null) {
-  if (LOG_LEVELS[level] < currentLogLevel) return;
-
-  const timestamp = new Date().toISOString().slice(11, 19);
-  let colorPrefix = "";
-
-  // 根据级别设置颜色
-  switch (level) {
-    case "debug":
-      colorPrefix = COLORS.dim + COLORS.cyan;
-      break;
-    case "info":
-      colorPrefix = COLORS.bright + COLORS.green;
-      break;
-    case "error":
-      colorPrefix = COLORS.bright + COLORS.red;
-      break;
-    default:
-      colorPrefix = COLORS.reset;
-  }
-
-  const prefix = `${COLORS.dim}[${timestamp}]${COLORS.reset} ${colorPrefix}[${level.toUpperCase()}]${COLORS.reset}`;
-
-  if (data) {
-    console.log(`${prefix} ${message}`, data);
-  } else {
-    console.log(`${prefix} ${message}`);
-  }
-}
-
-/** 调试日志函数 */
-const debug = (msg, data) => log("debug", msg, data);
-
-/** 信息日志函数 */
-const info = (msg, data) => log("info", msg, data);
-
-/** 错误日志函数 */
-const error = (msg, data) => log("error", msg, data);
-
-/**
- * 成功日志 - 操作成功的提示
- * @param {string} message - 成功消息
- */
-const success = (message) => {
-  const timestamp = new Date().toISOString().slice(11, 19);
-  const prefix = `${COLORS.dim}[${timestamp}]${COLORS.reset} ${COLORS.bright + COLORS.green}[INFO]${COLORS.reset}`;
-  console.log(`${prefix} ${COLORS.brightGreen}✅ ${message}${COLORS.reset}`);
-};
-
-/**
- * 失败日志 - 操作失败的提示
- * @param {string} message - 失败消息
- */
-const fail = (message) => {
-  const timestamp = new Date().toISOString().slice(11, 19);
-  const prefix = `${COLORS.dim}[${timestamp}]${COLORS.reset} ${COLORS.bright + COLORS.red}[INFO]${COLORS.reset}`;
-  console.log(`${prefix} ${COLORS.brightRed}❌ ${message}${COLORS.reset}`);
-};
-
-/**
- * 进度日志 - 进度信息显示
- * @param {string} message - 进度消息
- */
-const progress = (message) => {
-  const timestamp = new Date().toISOString().slice(11, 19);
-  const prefix = `${COLORS.dim}[${timestamp}]${COLORS.reset} ${COLORS.bright + COLORS.magenta}[INFO]${COLORS.reset}`;
-  console.log(`${prefix} ${COLORS.brightMagenta}📊 ${message}${COLORS.reset}`);
-};
-
-/**
- * 标题输出（不带时间戳，用于程序开头）
- * @param {string} message - 标题消息
- */
-const title = (message) => {
-  console.log(`${COLORS.bright}${message}${COLORS.reset}`);
-};
-
-/**
- * 分隔线输出
- */
-const separator = () => {
-  console.log(COLORS.dim + "=".repeat(70) + COLORS.reset);
-};
-
-// ============================================================================
-// 全局错误处理模块
-// ============================================================================
-
-/** 可忽略的网络错误代码列表 */
-const IGNORABLE_ERROR_CODES = new Set([
-  "EHOSTUNREACH", // 主机不可达
-  "ECONNREFUSED", // 连接被拒绝
-  "ETIMEDOUT", // 连接超时
-  "ENETUNREACH", // 网络不可达
-  "EADDRNOTAVAIL", // 地址不可用
-  "ECONNRESET", // 连接被重置
-  "EPIPE", // 管道破裂
-  "ERR_SSL_BAD_RECORD_TYPE", // SSL错误记录类型
-]);
-
-/**
- * 检查错误是否可以被忽略
- * @param {Error} error - 错误对象
- * @returns {boolean} 是否可忽略
- */
-const isIgnorableError = (error) => {
-  if (!error) return true;
-  return (
-    IGNORABLE_ERROR_CODES.has(error.code) ||
-    error.message?.includes("bad record type")
-  );
-};
-
-// 处理未捕获的异常
-process.on("uncaughtException", (error) => {
-  if (isIgnorableError(error)) return;
-  error(`未捕获的异常: ${error.message}`);
-  debug(error.stack);
-});
-
-// 处理未处理的Promise拒绝
-process.on("unhandledRejection", (reason) => {
-  if (isIgnorableError(reason)) return;
-  error(`未处理的Promise拒绝: ${reason}`);
-});
-
-// ============================================================================
-// 地理位置数据管理模块
-// ============================================================================
-
-/**
- * 检查locations.json文件是否存在，不存在则下载
- */
-async function checkLocationsJson() {
-  try {
-    await fs.promises.access(LOCATIONS_JSON);
-    info(`${LOCATIONS_JSON} 文件已存在`);
-  } catch (error) {
-    info(`${LOCATIONS_JSON} 文件不存在，正在下载...`);
-    await downloadLocationsJson();
-  }
-}
-
-/**
- * 下载地理位置JSON文件
- * @throws {Error} 下载失败时抛出错误
- */
-async function downloadLocationsJson() {
-  try {
-    const response = await fetch(LOCATIONS_URL);
-    if (!response.ok) {
-      throw new Error(`下载失败，HTTP状态码: ${response.status}`);
+// 解析命令行参数
+function parseArgs() {
+    const args = process.argv.slice(2);
+    for (let i = 0; i < args.length; i++) {
+        switch (args[i]) {
+            case '-file':
+            case '--file':
+                options.file = args[++i];
+                break;
+            case '-outfile':
+            case '--outfile':
+                options.outfile = args[++i];
+                break;
+            case '-max':
+            case '--max':
+                options.maxThreads = parseInt(args[++i]);
+                break;
+            case '-speedtest':
+            case '--speedtest':
+                options.speedtest = parseInt(args[++i]);
+                break;
+            case '-url':
+            case '--url':
+                options.url = args[++i];
+                break;
+            case '-tls':
+            case '--tls':
+                options.tls = args[++i] !== 'false';
+                break;
+            case '-delay':
+            case '--delay':
+                options.delay = parseInt(args[++i]);
+                break;
+        }
     }
-
-    const buffer = await response.arrayBuffer();
-    fs.writeFileSync(LOCATIONS_JSON, Buffer.from(buffer));
-    success(`${LOCATIONS_JSON} 下载并保存完成`);
-  } catch (error) {
-    throw new Error(`下载过程中发生错误: ${error.message}`);
-  }
 }
 
-/**
- * 读取locations.json文件并解析为Map
- * @returns {Promise<Map>} COLO代码到位置信息的映射
- */
-async function readLocationsJson() {
-  try {
-    const content = await fs.promises.readFile(LOCATIONS_JSON, "utf8");
-    const locations = JSON.parse(content);
+// HTTP GET 请求
+async function httpGet(url) {
+    return new Promise((resolve, reject) => {
+        const protocol = url.startsWith('https') ? https : http;
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 5000);
 
-    const coloMap = new Map();
-    locations.forEach((location) => {
-      if (location.iata && location.country && location.emoji) {
-        coloMap.set(location.iata, {
-          country: location.country,
-          emoji: location.emoji,
-          region: location.region || "",
+        const req = protocol.get(url, { signal: controller.signal }, (res) => {
+            let data = '';
+            res.on('data', chunk => data += chunk);
+            res.on('end', () => {
+                clearTimeout(timeoutId);
+                resolve(data);
+            });
         });
-      }
+        
+        req.on('error', (err) => {
+            clearTimeout(timeoutId);
+            reject(err);
+        });
     });
-
-    info(`加载完成: ${LOCATIONS_JSON} (${coloMap.size}个数据中心)`);
-    debug(`COLO列表: ${Array.from(coloMap.keys()).join(", ")}`);
-    return coloMap;
-  } catch (error) {
-    error(`读取失败 ${LOCATIONS_JSON}: ${error.message}`);
-    process.exit(1);
-  }
 }
 
-// ============================================================================
-// CSV解析模块
-// ============================================================================
-
-/**
- * 读取并解析CSV文件中的代理IP
- * @returns {Promise<string[]>} 代理IP列表 (格式: ip:port)
- */
-async function readIpsCsv() {
-  try {
-    const content = await fs.promises.readFile(IPS_CSV, "utf8");
-    const lines = content.split("\n").filter((line) => line.trim());
-
-    if (lines.length === 0) {
-      throw new Error("CSV文件为空");
-    }
-
-    // 解析CSV头，找出IP和端口所在的列
-    const headers = lines[0].split(",").map((h) => h.trim());
-    const ipIndex = headers.findIndex(
-      (h) => h.includes("IP") || h.includes("ip"),
-    );
-    const portIndex = headers.findIndex(
-      (h) => h.includes("端口") || h.includes("port"),
-    );
-
-    if (ipIndex === -1 || portIndex === -1) {
-      throw new Error("CSV文件中未找到IP地址或端口号列");
-    }
-
-    debug(`解析CSV: IP列[${ipIndex}], 端口列[${portIndex}]`);
-
-    const proxyList = [];
-    for (let i = 1; i < lines.length; i++) {
-      const columns = lines[i].split(",");
-      if (columns.length > Math.max(ipIndex, portIndex)) {
-        const ip = columns[ipIndex]?.replace(/"/g, "").trim();
-        const port = columns[portIndex]?.replace(/"/g, "").trim();
-
-        if (ip && port && net.isIP(ip) && !isNaN(parseInt(port))) {
-          proxyList.push(`${ip}:${port}`);
+// 加载位置信息
+async function loadLocations() {
+    try {
+        const locationsPath = join(__dirname, 'locations.json');
+        
+        if (fs.existsSync(locationsPath)) {
+            console.log('本地 locations.json 已存在，无需重新下载');
+            const data = await fs.promises.readFile(locationsPath, 'utf8');
+            locations = JSON.parse(data);
         } else {
-          debug(`跳过无效行 ${i + 1}: IP=${ip}, Port=${port}`);
+            console.log('本地 locations.json 不存在\n正在从 https://locations-adw.pages.dev/ 下载 locations.json');
+            const response = await httpGet('https://locations-adw.pages.dev/');
+            locations = JSON.parse(response);
+            await fs.promises.writeFile(locationsPath, response);
         }
-      }
-    }
 
-    info(`加载完成: ${proxyList.length} 个IP (共${lines.length - 1}行)`);
-    debug(
-      `IP列表: ${proxyList.slice(0, 5).join(", ")}${proxyList.length > 5 ? "..." : ""}`,
-    );
-    return proxyList;
-  } catch (error) {
-    error(`读取失败 ${IPS_CSV}: ${error.message}`);
-    process.exit(1);
-  }
-}
-
-// ============================================================================
-// 连接池模块 - 核心性能优化组件
-// ============================================================================
-
-/**
- * 连接池类 - 管理和复用TCP/TLS连接
- *
- * 设计原理：
- * 1. 使用Map存储连接，键为"ip:port"
- * 2. 支持连接升级（TCP -> TLS）
- * 3. 自动清理空闲连接
- * 4. 统计命中率用于性能分析
- */
-class ConnectionPool {
-  constructor() {
-    /** 存储所有连接 { key: { socket, tlsSocket, lastUsed } } */
-    this.connections = new Map();
-
-    /** 最大空闲时间（毫秒） */
-    this.maxIdleTime = 30000;
-
-    /** 连接池最大大小 */
-    this.maxPoolSize = 500;
-
-    /** 统计信息 */
-    this.stats = {
-      hits: 0, // 命中次数
-      misses: 0, // 未命中次数
-      created: 0, // 创建连接数
-      closed: 0, // 关闭连接数
-      errors: 0, // 错误次数
-    };
-
-    debug("连接池初始化完成");
-  }
-
-  /**
-   * 获取或创建连接
-   * @param {string} ip - IP地址
-   * @param {number} port - 端口
-   * @param {boolean} useTLS - 是否使用TLS
-   * @returns {Promise<Object>} 连接对象
-   */
-  async getConnection(ip, port, useTLS = true) {
-    const key = `${ip}:${port}`;
-    let conn = this.connections.get(key);
-
-    // 命中连接池 - 连接存在且未销毁
-    if (conn && !conn.socket.destroyed) {
-      conn.lastUsed = Date.now();
-      this.stats.hits++;
-      debug(`连接池命中: ${key}`);
-
-      // 如果需要TLS但当前只有TCP连接，升级连接
-      if (useTLS && !conn.tlsSocket) {
-        debug(`升级连接到TLS: ${key}`);
-        try {
-          conn.tlsSocket = await this.upgradeToTLS(conn.socket);
-        } catch (error) {
-          this.stats.errors++;
-          this.connections.delete(key);
-          debug(`TLS升级失败: ${key} - ${error.message}`);
-          throw error;
+        for (const loc of locations) {
+            locationMap.set(loc.iata, loc);
         }
-      }
-
-      return conn;
-    }
-
-    // 未命中，创建新连接
-    this.stats.misses++;
-    debug(`连接池未命中，创建新连接: ${key}`);
-
-    try {
-      const socket = await this.createTCPSocket(ip, port);
-      conn = {
-        socket,
-        tlsSocket: null,
-        lastUsed: Date.now(),
-        key,
-      };
-
-      if (useTLS) {
-        conn.tlsSocket = await this.upgradeToTLS(socket);
-      }
-
-      this.connections.set(key, conn);
-      this.stats.created++;
-
-      // 限制连接池大小
-      if (this.connections.size > this.maxPoolSize) {
-        const closed = this.cleanup(true);
-        debug(`连接池超过大小限制，清理了${closed}个连接`);
-      }
-
-      return conn;
-    } catch (error) {
-      this.stats.errors++;
-      debug(`创建连接失败: ${key} - ${error.message}`);
-      throw error;
-    }
-  }
-
-  /**
-   * 创建TCP连接
-   * @param {string} ip - IP地址
-   * @param {number} port - 端口
-   * @returns {Promise<net.Socket>} TCP Socket
-   */
-  createTCPSocket(ip, port) {
-    return new Promise((resolve, reject) => {
-      const socket = new net.Socket();
-      let isDone = false;
-
-      // 错误处理函数
-      const onError = (err) => {
-        if (isDone) return;
-        isDone = true;
-        cleanup();
-        reject(new Error(`TCP连接失败: ${err.message}`));
-      };
-
-      // 连接成功处理
-      const onConnect = () => {
-        if (isDone) return;
-        isDone = true;
-        cleanup();
-        socket.setKeepAlive(true, 60000);
-        socket.setNoDelay(true);
-        resolve(socket);
-      };
-
-      // 超时处理
-      const onTimeout = () => {
-        if (isDone) return;
-        isDone = true;
-        cleanup();
-        reject(new Error(`TCP连接超时 (${TCP_TIMEOUT_MS}ms)`));
-      };
-
-      // 清理事件监听
-      const cleanup = () => {
-        socket.removeListener("connect", onConnect);
-        socket.removeListener("error", onError);
-        socket.removeListener("timeout", onTimeout);
-      };
-
-      // 注册事件监听
-      socket.once("error", onError);
-      socket.once("connect", onConnect);
-      socket.once("timeout", onTimeout);
-      socket.setTimeout(TCP_TIMEOUT_MS);
-
-      // 发起连接
-      socket.connect(parseInt(port), ip);
-    });
-  }
-
-  /**
-   * 将TCP连接升级到TLS
-   * @param {net.Socket} socket - TCP Socket
-   * @returns {Promise<tls.TLSSocket>} TLS Socket
-   */
-  upgradeToTLS(socket) {
-    return new Promise((resolve, reject) => {
-      const tlsSocket = tls.connect({
-        socket: socket,
-        servername: "speed.cloudflare.com",
-        rejectUnauthorized: false,
-        timeout: TLS_TIMEOUT_MS,
-      });
-
-      let isDone = false;
-
-      // 错误处理
-      const onError = (err) => {
-        if (isDone) return;
-        isDone = true;
-        cleanup();
-        reject(new Error(`TLS握手失败: ${err.message}`));
-      };
-
-      // 安全连接建立处理
-      const onSecureConnect = () => {
-        if (isDone) return;
-        isDone = true;
-        cleanup();
-        tlsSocket.setKeepAlive(true, 60000);
-        tlsSocket.setNoDelay(true);
-        resolve(tlsSocket);
-      };
-
-      // 超时处理
-      const onTimeout = () => {
-        if (isDone) return;
-        isDone = true;
-        cleanup();
-        reject(new Error(`TLS握手超时 (${TLS_TIMEOUT_MS}ms)`));
-      };
-
-      // 清理事件监听
-      const cleanup = () => {
-        tlsSocket.removeListener("secureConnect", onSecureConnect);
-        tlsSocket.removeListener("error", onError);
-        tlsSocket.removeListener("timeout", onTimeout);
-      };
-
-      // 注册事件监听
-      tlsSocket.once("error", onError);
-      tlsSocket.once("secureConnect", onSecureConnect);
-      tlsSocket.once("timeout", onTimeout);
-    });
-  }
-
-  /**
-   * 释放连接回池（更新最后使用时间）
-   * @param {string} ip - IP地址
-   * @param {number} port - 端口
-   */
-  release(ip, port) {
-    const key = `${ip}:${port}`;
-    const conn = this.connections.get(key);
-    if (conn) {
-      conn.lastUsed = Date.now();
-      debug(`释放连接: ${key}`);
-    }
-  }
-
-  /**
-   * 清理空闲连接
-   * @param {boolean} force - 是否强制清理（用于限制池大小）
-   * @returns {number} 关闭的连接数
-   */
-  cleanup(force = false) {
-    const now = Date.now();
-    let closed = 0;
-
-    for (const [key, conn] of this.connections.entries()) {
-      const isIdle = now - conn.lastUsed > this.maxIdleTime;
-      const needShrink = force && this.connections.size > this.maxPoolSize;
-
-      if (isIdle || needShrink) {
-        // 销毁TLS连接
-        if (conn.tlsSocket) {
-          try {
-            conn.tlsSocket.destroy();
-          } catch (e) {}
-        }
-        // 销毁TCP连接
-        if (conn.socket) {
-          try {
-            conn.socket.destroy();
-          } catch (e) {}
-        }
-        this.connections.delete(key);
-        closed++;
-        debug(`清理连接: ${key} (空闲: ${isIdle}, 强制: ${needShrink})`);
-      }
-    }
-
-    this.stats.closed += closed;
-    return closed;
-  }
-
-  /**
-   * 关闭所有连接并输出统计信息
-   */
-  destroy() {
-    const count = this.cleanup(true);
-    this.stats.closed += count;
-
-    info("📊 连接池统计:");
-    info(`  ✅ 命中: ${this.stats.hits}`);
-    info(`  ❌ 未命中: ${this.stats.misses}`);
-    info(`  📦 创建: ${this.stats.created}`);
-    info(`  🗑️ 关闭: ${this.stats.closed}`);
-    info(`  ⚠️ 错误: ${this.stats.errors}`);
-    info(`  💾 剩余: ${this.connections.size}`);
-  }
-}
-
-/** 全局连接池实例 */
-const connectionPool = new ConnectionPool();
-
-// ============================================================================
-// HTTP请求模块
-// ============================================================================
-
-/**
- * 带超时的连接获取
- * @param {string} ip - IP地址
- * @param {number} port - 端口
- * @param {boolean} useTLS - 是否使用TLS
- * @returns {Promise<Object>} 连接对象
- */
-async function getConnectionWithTimeout(ip, port, useTLS = true) {
-  return Promise.race([
-    connectionPool.getConnection(ip, port, useTLS),
-    new Promise((_, reject) =>
-      setTimeout(
-        () => reject(new Error(`获取连接超时 (${TCP_TIMEOUT_MS}ms)`)),
-        TCP_TIMEOUT_MS + 500,
-      ),
-    ),
-  ]);
-}
-
-/**
- * 发送原始HTTP/1.1请求
- * @param {net.Socket|tls.TLSSocket} socket - Socket连接
- * @param {string} host - 主机名
- * @param {string} path - 请求路径
- * @returns {Promise<string>} 响应体
- */
-async function sendHttpRequest(socket, host, path = "/cdn-cgi/trace") {
-  const request = [
-    `GET ${path} HTTP/1.1`,
-    `Host: ${host}`,
-    "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-    "Connection: keep-alive",
-    "Accept: */*",
-    "Accept-Encoding: identity",
-    "",
-    "",
-  ].join("\r\n");
-
-  return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      cleanup();
-      reject(new Error("HTTP请求超时"));
-    }, TIMEOUT_MS);
-
-    let buffer = Buffer.alloc(0);
-    let headersEnd = -1;
-    let contentLength = -1;
-    let isChunked = false;
-    let bodyStart = 0;
-    let resolved = false;
-
-    // 数据接收处理
-    const onData = (chunk) => {
-      if (resolved) return;
-      buffer = Buffer.concat([buffer, chunk]);
-
-      // 解析HTTP头部
-      if (headersEnd === -1) {
-        headersEnd = buffer.indexOf("\r\n\r\n");
-        if (headersEnd !== -1) {
-          const headers = buffer.slice(0, headersEnd).toString();
-
-          if (!headers.startsWith("HTTP/1.1 200")) {
-            cleanup();
-            reject(new Error(`非200状态码`));
-            return;
-          }
-
-          const clMatch = headers.match(/content-length: (\d+)/i);
-          if (clMatch) contentLength = parseInt(clMatch[1], 10);
-          isChunked = headers
-            .toLowerCase()
-            .includes("transfer-encoding: chunked");
-          bodyStart = headersEnd + 4;
-        }
-      }
-
-      // 检查响应体是否完整
-      if (headersEnd !== -1 && !resolved) {
-        const bodyBuffer = buffer.slice(bodyStart);
-
-        if (contentLength > 0 && bodyBuffer.length >= contentLength) {
-          resolved = true;
-          const body = bodyBuffer.slice(0, contentLength).toString();
-          cleanup();
-          resolve(body);
-        } else if (isChunked) {
-          if (bodyBuffer.slice(-5).toString() === "0\r\n\r\n") {
-            resolved = true;
-            // 简单的chunked解码
-            const body = bodyBuffer.toString();
-            const chunks = [];
-            let pos = 0;
-            while (pos < body.length) {
-              const lineEnd = body.indexOf("\r\n", pos);
-              if (lineEnd === -1) break;
-              const chunkSize = parseInt(body.slice(pos, lineEnd), 16);
-              if (chunkSize === 0) break;
-              const chunkStart = lineEnd + 2;
-              const chunkEnd = chunkStart + chunkSize;
-              chunks.push(body.slice(chunkStart, chunkEnd));
-              pos = chunkEnd + 2;
-            }
-            cleanup();
-            resolve(chunks.join(""));
-          }
-        }
-      }
-    };
-
-    const onError = (err) => {
-      cleanup();
-      reject(new Error(`Socket错误: ${err.message}`));
-    };
-
-    const onClose = () => {
-      cleanup();
-      reject(new Error("连接关闭"));
-    };
-
-    const cleanup = () => {
-      clearTimeout(timeout);
-      socket.removeListener("data", onData);
-      socket.removeListener("error", onError);
-      socket.removeListener("close", onClose);
-    };
-
-    socket.on("data", onData);
-    socket.on("error", onError);
-    socket.on("close", onClose);
-
-    try {
-      socket.write(request);
-      debug(`发送HTTP请求到 ${host}${path}`);
     } catch (err) {
-      cleanup();
-      reject(new Error(`写入请求失败: ${err.message}`));
+        console.error('加载位置信息失败:', err.message);
+        process.exit(1);
     }
-  });
 }
 
-// ============================================================================
-// 工具函数模块
-// ============================================================================
-
-/**
- * 判断是否为IPv6地址
- * @param {string} ip - IP地址
- * @returns {boolean} 是否为IPv6
- */
-const isIPv6 = (ip) => net.isIPv6(ip);
-
-/**
- * 从trace响应中提取ip和colo字段
- * @param {string} traceText - trace响应文本
- * @returns {Object} 包含ip和colo的对象
- */
-const extractFromTrace = (traceText) => {
-  const result = { ip: null, colo: null };
-  if (!traceText) return result;
-
-  const lines = traceText.split("\n");
-  lines.forEach((line) => {
-    const index = line.indexOf("=");
-    if (index > 0) {
-      const key = line.substring(0, index).trim();
-      const value = line.substring(index + 1).trim();
-      if (key && value) result[key] = value;
+// 读取IP列表
+async function readIPs(filename) {
+    const filePath = join(__dirname, filename);
+    
+    if (!fs.existsSync(filePath)) {
+        throw new Error(`文件 ${filename} 不存在`);
     }
-  });
 
-  return result;
-};
-
-/**
- * 按国家分组代理
- * @param {Array} proxies - 代理对象数组
- * @returns {Object} 按国家分组的代理
- */
-const groupByCountry = (proxies) => {
-  const groups = {};
-  proxies.forEach((proxy) => {
-    const country = proxy.country;
-    if (!groups[country]) groups[country] = [];
-    groups[country].push(proxy);
-  });
-  return groups;
-};
-
-/**
- * 为代理添加序号
- * @param {Array} validProxyObjects - 有效代理对象数组
- * @param {number} limitPerCountry - 每个国家限制数量
- * @returns {Object} 包含all和limited两个版本的代理列表
- */
-const addSequentialNumbers = (validProxyObjects, limitPerCountry = 5) => {
-  const groups = groupByCountry(validProxyObjects);
-  const allNumberedProxies = [];
-  const limitedNumberedProxies = [];
-
-  Object.keys(groups)
-    .sort()
-    .forEach((country) => {
-      const groupProxies = groups[country];
-
-      if (groupProxies.length >= limitPerCountry) {
-        // 全部代理
-        groupProxies.forEach((proxy, index) => {
-          allNumberedProxies.push(
-            `${proxy.ipPort}#${proxy.emoji}${proxy.country}${index + 1}`,
-          );
-        });
-
-        // 限制数量的代理
-        groupProxies.slice(0, limitPerCountry).forEach((proxy, index) => {
-          limitedNumberedProxies.push(
-            `${proxy.ipPort}#${proxy.emoji}${proxy.country}${index + 1}`,
-          );
-        });
-      }
+    const ips = [];
+    const fileStream = fs.createReadStream(filePath);
+    const rl = readline.createInterface({
+        input: fileStream,
+        crlfDelay: Infinity
     });
 
-  return { all: allNumberedProxies, limited: limitedNumberedProxies };
-};
+    let isFirstLine = true;
+    let ipColIndex = -1;
+    let portColIndex = -1;
 
-// ============================================================================
-// 代理检测核心模块
-// ============================================================================
+    for await (const line of rl) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
 
-/**
- * 检测单个代理
- * @param {string} proxyAddress - 代理地址 (ip:port)
- * @param {Map} coloMap - COLO位置映射
- * @param {string} ipVersion - IP版本过滤 ('ipv4', 'ipv6', 'all')
- * @returns {Promise<Object|null>} 检测结果对象或null
- */
-async function checkProxy(proxyAddress, coloMap, ipVersion = "all") {
-  const parts = proxyAddress.split(":");
-  if (parts.length !== 2) return null;
+        // 解析 CSV 行
+        const values = parseCSVLine(trimmed);
+        
+        // 处理表头
+        if (isFirstLine) {
+            isFirstLine = false;
+            // 查找 IP 和 port 列
+            for (let i = 0; i < values.length; i++) {
+                const header = values[i].toLowerCase().trim();
+                if (header.includes('ip') || header === 'ip地址' || header === 'address') {
+                    ipColIndex = i;
+                }
+                if (header.includes('port') || header === '端口' || header === '端口号') {
+                    portColIndex = i;
+                }
+            }
+            
+            if (ipColIndex === -1 || portColIndex === -1) {
+                throw new Error('CSV文件中未找到IP或端口列');
+            }
+            continue;
+        }
 
-  const ip = parts[0];
-  const port = parseInt(parts[1], 10);
-  const startTime = Date.now();
+        // 读取数据行
+        if (values.length > Math.max(ipColIndex, portColIndex)) {
+            const ip = values[ipColIndex].trim();
+            const portStr = values[portColIndex].trim();
+            
+            if (!ip || !portStr) continue;
 
-  let conn = null;
-  let hasConnection = false;
+            const port = parseInt(portStr);
+            if (isNaN(port) || port < 1 || port > 65535) {
+                console.log(`端口格式错误: ${portStr}`);
+                continue;
+            }
 
-  try {
-    // 获取复用连接
-    conn = await getConnectionWithTimeout(ip, port, true);
-    hasConnection = true;
-
-    // 发送HTTP请求
-    const traceData = await sendHttpRequest(
-      conn.tlsSocket || conn.socket,
-      "speed.cloudflare.com",
-      "/cdn-cgi/trace",
-    );
-
-    const elapsed = Date.now() - startTime;
-    const { ip: outboundIp, colo } = extractFromTrace(traceData);
-
-    if (!outboundIp) {
-      debug(`${proxyAddress} 无IP信息 (${elapsed}ms)`);
-      connectionPool.release(ip, port);
-      return null;
+            ips.push({ ip, port });
+        }
     }
 
-    // 获取位置信息
-    const locationInfo = colo && coloMap.has(colo) ? coloMap.get(colo) : null;
-    const countryDisplay = locationInfo
-      ? `${locationInfo.emoji} ${locationInfo.country}`
-      : `COLO:${colo || "未知"}`;
-
-    const isOutboundIPv6 = isIPv6(outboundIp);
-
-    // IP版本过滤
-    if (ipVersion === "ipv4" && isOutboundIPv6) {
-      debug(
-        `${proxyAddress} IPv6出口 ${countryDisplay} (${elapsed}ms) - 已过滤`,
-      );
-      connectionPool.release(ip, port);
-      return null;
-    }
-
-    if (ipVersion === "ipv6" && !isOutboundIPv6) {
-      debug(
-        `${proxyAddress} IPv4出口 ${countryDisplay} (${elapsed}ms) - 已过滤`,
-      );
-      connectionPool.release(ip, port);
-      return null;
-    }
-
-    // 验证位置信息
-    if (!colo || !coloMap.has(colo)) {
-      debug(
-        `${proxyAddress} ${isOutboundIPv6 ? "IPv6" : "IPv4"}出口 ${countryDisplay} (${elapsed}ms) - 位置未知`,
-      );
-      connectionPool.release(ip, port);
-      return null;
-    }
-
-    // 有效代理
-    success(
-      `${proxyAddress} ${isOutboundIPv6 ? "IPv6" : "IPv4"}出口 ${countryDisplay} (${elapsed}ms)`,
-    );
-    connectionPool.release(ip, port);
-
-    return {
-      ipPort: proxyAddress,
-      country: locationInfo.country,
-      emoji: locationInfo.emoji,
-      colo: colo,
-      timestamp: Date.now(),
-      ipVersion: isOutboundIPv6 ? "ipv6" : "ipv4",
-    };
-  } catch (error) {
-    const elapsed = Date.now() - startTime;
-
-    if (!error.message.includes("超时")) {
-      debug(
-        `${proxyAddress} 错误: ${error.message.substring(0, 30)} (${elapsed}ms)`,
-      );
-    }
-
-    if (hasConnection) connectionPool.release(ip, port);
-    return null;
-  }
+    return ips;
 }
 
-// ============================================================================
-// 并发控制模块
-// ============================================================================
-
-/**
- * 批量处理代理检测
- * @param {Array} items - 代理地址数组
- * @param {number} concurrency - 并发数
- * @param {Function} processor - 处理函数
- * @param {Map} coloMap - COLO位置映射
- * @returns {Promise<Array>} 检测结果数组
- */
-async function processBatch(items, concurrency, processor, coloMap) {
-  const results = [];
-  const total = items.length;
-  let completed = 0;
-  let currentIndex = 0;
-
-  info(`🚀 开始检测 ${total} 个ProxyIP (并发${concurrency}, 连接池复用模式)`);
-
-  const worker = async () => {
-    while (true) {
-      const index = currentIndex++;
-      if (index >= total) break;
-
-      const item = items[index];
-      try {
-        const result = await processor(item, coloMap);
-        if (result) results.push(result);
-      } catch (error) {
-        debug(`处理 ${item} 时发生错误: ${error.message}`);
-      }
-
-      completed++;
-
-      // 进度显示
-      if (completed % 10 === 0 || completed === total) {
-        const percent = ((completed / total) * 100).toFixed(1);
-        const hitRate =
-          connectionPool.stats.hits + connectionPool.stats.misses > 0
-            ? (
-                (connectionPool.stats.hits /
-                  (connectionPool.stats.hits + connectionPool.stats.misses)) *
-                100
-              ).toFixed(1)
-            : "0.0";
-
-        progress(
-          `进度: ${completed}/${total} (${percent}%) | ` +
-            `有效: ${results.length} | ` +
-            `命中: ${hitRate}% | ` +
-            `池: ${connectionPool.connections.size}`,
-        );
-      }
+// CSV 行解析函数（处理引号和逗号）
+function parseCSVLine(line) {
+    const values = [];
+    let current = '';
+    let inQuotes = false;
+    
+    for (let i = 0; i < line.length; i++) {
+        const char = line[i];
+        
+        if (char === '"') {
+            if (inQuotes && line[i + 1] === '"') {
+                // 转义的引号
+                current += '"';
+                i++;
+            } else {
+                // 切换引号状态
+                inQuotes = !inQuotes;
+            }
+        } else if (char === ',' && !inQuotes) {
+            // 逗号分隔符
+            values.push(current);
+            current = '';
+        } else {
+            current += char;
+        }
     }
-  };
-
-  const workerCount = Math.min(concurrency, total);
-  const workers = Array(workerCount)
-    .fill()
-    .map(() => worker());
-  await Promise.all(workers);
-
-  return results;
+    
+    // 添加最后一个值
+    values.push(current);
+    
+    return values;
 }
 
-/**
- * 打印统计摘要
- * @param {Array} proxyAddresses - 所有代理地址
- * @param {Array} validProxies - 有效代理
- * @param {number} elapsedTime - 耗时(秒)
- */
-function printSummary(proxyAddresses, validProxies, elapsedTime) {
-  const total = proxyAddresses.length;
-  const valid = validProxies.length;
-  const invalid = total - valid;
-  const successRate = ((valid / total) * 100).toFixed(1);
+// 测试单个IP
+async function testSingleIP(ip, port) {
+    return new Promise((resolve) => {
+        const start = Date.now();
+        let timeoutId;
 
-  const hitRate =
-    connectionPool.stats.hits + connectionPool.stats.misses > 0
-      ? (
-          (connectionPool.stats.hits /
-            (connectionPool.stats.hits + connectionPool.stats.misses)) *
-          100
-        ).toFixed(1)
-      : "0.0";
+        const socket = new net.Socket();
+        
+        const cleanup = () => {
+            if (timeoutId) clearTimeout(timeoutId);
+            socket.removeAllListeners();
+            socket.destroy();
+        };
 
-  separator();
-  info("📊 检测完成统计");
-  separator();
-  info(`  总 ProxyIP 数:     ${total}`);
-  info(`  ✅ 可用:           ${valid} (${successRate}%)`);
-  info(`  ❌ 无效:           ${invalid}`);
-  info(`  ⏱️ 耗时:           ${elapsedTime.toFixed(1)}s`);
-  info(`  ⚡ 平均速度:        ${(total / elapsedTime).toFixed(1)}个/秒`);
-  info(`  🎯 连接池命中率:    ${hitRate}%`);
-  info(`  💾 连接池大小:      ${connectionPool.connections.size}个`);
-  separator();
-}
+        timeoutId = setTimeout(() => {
+            cleanup();
+            resolve(null);
+        }, TIMEOUT);
 
-/**
- * 启动连接池清理定时器
- */
-function startCleanupTimer() {
-  setInterval(() => {
-    const before = connectionPool.connections.size;
-    const closed = connectionPool.cleanup();
-    if (closed > 0) {
-      debug(
-        `连接池清理: ${before} → ${connectionPool.connections.size} (关闭${closed}个空闲连接)`,
-      );
-    }
-  }, 10000);
-}
+        socket.setTimeout(TIMEOUT);
+        
+        socket.on('connect', async () => {
+            const tcpDuration = Date.now() - start;
+            
+            // 延迟过滤
+            if (options.delay > 0 && tcpDuration > options.delay) {
+                cleanup();
+                resolve(null);
+                return;
+            }
 
-// ============================================================================
-// 主函数
-// ============================================================================
-
-/**
- * 主程序入口
- */
-async function main() {
-  // 显示程序标题
-  console.log("");
-  title("=".repeat(70));
-  title("🚀 Cloudflare CDN ProxyIP 检测工具 v4.0 - 连接池复用模式");
-  title("=".repeat(70));
-  console.log("");
-
-  const startTime = Date.now();
-
-  try {
-    // 启动连接池清理
-    startCleanupTimer();
-
-    // 读取CSV文件
-    info("📖 读取配置文件...");
-    const proxyAddresses = await readIpsCsv();
-
-    if (proxyAddresses.length === 0) {
-      info("⚠️ 没有IP地址，程序退出");
-      return;
-    }
-
-    // 加载地理位置数据
-    await checkLocationsJson();
-    const coloMap = await readLocationsJson();
-
-    // 打乱顺序，避免集中测试同一IP段
-    const shuffled = [...proxyAddresses].sort(() => Math.random() - 0.5);
-
-    // 批量检测代理
-    const validProxyObjects = await processBatch(
-      shuffled,
-      CONCURRENCY_LIMIT,
-      (proxy, map) => checkProxy(proxy, map, OUTPUT_TYPE),
-      coloMap,
-    );
-
-    // 关闭连接池
-    connectionPool.destroy();
-
-    // 计算总耗时
-    const totalTime = (Date.now() - startTime) / 1000;
-
-    // 为代理添加序号
-    const { all: allProxies, limited: limitedProxies } = addSequentialNumbers(
-      validProxyObjects,
-      LIMIT_PER_COUNTRY,
-    );
-
-    // 打印统计摘要
-    printSummary(proxyAddresses, validProxyObjects, totalTime);
-
-    // 保存结果
-    if (allProxies.length > 0) {
-      // 保存全部代理
-      await fs.promises.writeFile(OUTPUT_ALL, allProxies.join("\n"), "utf8");
-      success(`已保存: ${OUTPUT_ALL} (全部代理, ${allProxies.length}条)`);
-
-      // 保存每个国家前N个代理
-      await fs.promises.writeFile(
-        OUTPUT_FILE,
-        limitedProxies.join("\n"),
-        "utf8",
-      );
-      success(
-        `已保存: ${OUTPUT_FILE} (每个国家前${LIMIT_PER_COUNTRY}个, ${limitedProxies.length}条)`,
-      );
-
-      // 按国家分组统计
-      const groups = groupByCountry(validProxyObjects);
-      info("\n📊 各国代理数量:");
-      Object.keys(groups)
-        .sort()
-        .forEach((country) => {
-          const count = groups[country].length;
-          const emoji = groups[country][0]?.emoji || "";
-          if (count >= LIMIT_PER_COUNTRY) {
-            info(
-              `  ✅ ${emoji} ${country}: 共${count}个 (输出前${LIMIT_PER_COUNTRY}个)`,
-            );
-          } else {
-            info(
-              `  ⚠️ ${emoji} ${country}: 共${count}个 (数量不足${LIMIT_PER_COUNTRY}，不输出)`,
-            );
-          }
+            try {
+                const result = await makeHTTPRequest(socket, ip, port, tcpDuration);
+                cleanup();
+                resolve(result);
+            } catch (err) {
+                cleanup();
+                resolve(null);
+            }
         });
 
-      // 显示前10个可用代理
-      info(`\n📋 前10个可用ProxyIP（每个国家前${LIMIT_PER_COUNTRY}个）:`);
-      limitedProxies.slice(0, 10).forEach((proxy, index) => {
-        info(`  ${index + 1}. ${proxy}`);
-      });
+        socket.on('error', () => {
+            cleanup();
+            resolve(null);
+        });
 
-      if (limitedProxies.length > 10) {
-        info(`  ... 共${limitedProxies.length}条`);
-      }
-    } else {
-      info("\n⚠️ 未找到可用ProxyIP，不保存文件");
-    }
+        socket.on('timeout', () => {
+            cleanup();
+            resolve(null);
+        });
 
-    success("\n✨ 检测完成\n");
-    process.exit(0);
-  } catch (error) {
-    error(`\n❌ 程序异常: ${error.message}`);
-    debug(error.stack);
-    process.exit(1);
-  }
+        socket.connect(port, ip);
+    });
+}
+function formatTimestamp(date) {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    const hours = String(date.getHours()).padStart(2, '0');
+    const minutes = String(date.getMinutes()).padStart(2, '0');
+    const seconds = String(date.getSeconds()).padStart(2, '0');
+    
+    return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+}
+// 发送HTTP请求
+function makeHTTPRequest(socket, ip, port, tcpDuration) {
+    return new Promise((resolve, reject) => {
+        const protocol = options.tls ? 'https' : 'http';
+        const requestURL = `${protocol}://${REQUEST_URL}`;
+        
+        const parsedUrl = new URL(requestURL);
+        const headers = {
+            'Host': parsedUrl.host,
+            'User-Agent': 'Mozilla/5.0',
+            'Connection': 'close'
+        };
+
+        const requestOptions = {
+            method: 'GET',
+            path: parsedUrl.pathname + parsedUrl.search,
+            headers: headers
+        };
+
+        let client;
+        if (options.tls) {
+            client = tls.connect({
+                socket: socket,
+                servername: parsedUrl.hostname,
+                host: parsedUrl.hostname,
+                port: parsedUrl.port || 443
+            });
+        } else {
+            client = socket;
+        }
+
+        let responseData = '';
+        let timeoutId = setTimeout(() => {
+            client.destroy();
+            reject(new Error('Request timeout'));
+        }, MAX_DURATION);
+
+        client.on('data', (chunk) => {
+            responseData += chunk.toString();
+        });
+
+        client.on('end', () => {
+            clearTimeout(timeoutId);
+            
+            // 解析响应
+            if (responseData.includes('uag=Mozilla/5.0')) {
+                const coloMatch = responseData.match(/colo=([A-Z]+)/);
+                const locMatch = responseData.match(/loc=([A-Z]+)/);
+                
+                if (coloMatch && locMatch) {
+                    const dataCenter = coloMatch[1];
+                    const locCode = locMatch[1];
+                    
+                    // 解析所有字段
+                    const parsedData = parseTraceResponse(responseData);
+                    
+                    const loc = locationMap.get(dataCenter);
+                    
+                    const outboundIP = parsedData.ip || '';
+                    const ipType = getIPType(outboundIP);
+                    let formattedTimestamp = '';
+                    if (parsedData.ts) {
+                        const timestamp = parseInt(parsedData.ts);
+                        if (!isNaN(timestamp)) {
+                            // 判断是秒级还是毫秒级时间戳
+                            const date = timestamp > 10000000000 
+                                ? new Date(timestamp) // 毫秒级时间戳
+                                : new Date(timestamp * 1000); // 秒级时间戳
+                            formattedTimestamp = formatTimestamp(date);
+                        } else {
+                            formattedTimestamp = parsedData.ts; // 如果不是数字，保留原值
+                        }
+                    }
+                    const result = {
+                        ip,
+                        port,
+                        dataCenter,
+                        locCode,
+                        latency: `${tcpDuration} ms`,
+                        tcpDuration,
+                        outboundIP,
+                        ipType,
+                        visitScheme: parsedData.visit_scheme || '',
+                        tlsVersion: parsedData.tls || '',
+                        sni: parsedData.sni || '',
+                        httpVersion: parsedData.http || '',
+                        warp: parsedData.warp || '',
+                        gateway: parsedData.gateway || '',
+                        rbi: parsedData.rbi || '',
+                        kex: parsedData.kex || '',
+                        timestamp: formattedTimestamp || '',
+                        region: loc?.region || '',
+                        city: loc?.city || '',
+                        region_zh: loc?.region_zh || '',
+                        country: loc?.country || '',
+                        city_zh: loc?.city_zh || '',
+                        emoji: loc?.emoji || ''
+                    };
+                    
+                    console.log(`\n发现有效IP ${ip} 端口 ${port} 位置信息 ${result.city_zh} 出站IP ${outboundIP} (${ipType}) 延迟 ${tcpDuration} 毫秒`);
+                    resolve(result);
+                } else {
+                    reject(new Error('Invalid response format'));
+                }
+            } else {
+                reject(new Error('Unexpected response'));
+            }
+        });
+
+        client.on('error', (err) => {
+            clearTimeout(timeoutId);
+            reject(err);
+        });
+
+        // 发送请求
+        const requestLine = `GET ${requestOptions.path} HTTP/1.1\r\n`;
+        const headerLines = Object.entries(requestOptions.headers)
+            .map(([k, v]) => `${k}: ${v}\r\n`).join('');
+        const request = requestLine + headerLines + '\r\n';
+        
+        client.write(request);
+    });
 }
 
-// 执行主函数
-main();
+// 解析响应
+function parseTraceResponse(body) {
+    const result = {};
+    const lines = body.split('\n');
+    
+    for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        
+        const parts = trimmed.split('=');
+        if (parts.length >= 2) {
+            const key = parts[0].trim();
+            const value = parts.slice(1).join('=').trim();
+            result[key] = value;
+        }
+    }
+    
+    return result;
+}
+
+// 获取IP类型
+function getIPType(ip) {
+    if (!ip) return '未知';
+    
+    if (net.isIPv4(ip)) return 'IPv4';
+    if (net.isIPv6(ip)) return 'IPv6';
+    return '无效IP';
+}
+
+// 测试IP列表
+async function testIPs(ips) {
+    const results = [];
+    const queue = [...ips];
+    const activePromises = new Set();
+    let completed = 0;
+    const total = ips.length;
+
+    return new Promise((resolve) => {
+        function next() {
+            while (activePromises.size < options.maxThreads && queue.length > 0) {
+                const item = queue.shift();
+                const promise = testSingleIP(item.ip, item.port).then(result => {
+                    if (result) {
+                        results.push(result);
+                        validCount++;
+                    }
+                    activePromises.delete(promise);
+                    completed++;
+                    const percentage = (completed / total * 100).toFixed(2);
+                    process.stdout.write(`\r已完成: ${completed} 总数: ${total} 已完成: ${percentage}%`);
+                    
+                    if (completed === total) {
+                        console.log(`\n已完成: ${completed} 总数: ${total} 已完成: 100.00%`);
+                    }
+                    
+                    next();
+                });
+                activePromises.add(promise);
+            }
+
+            if (completed === total && activePromises.size === 0) {
+                resolve(results);
+            }
+        }
+
+        next();
+    });
+}
+
+// 获取下载速度
+async function getDownloadSpeed(ip, port) {
+    return new Promise((resolve) => {
+        const protocol = options.tls ? 'https' : 'http';
+        const url = `${protocol}://${options.url}`;
+        const parsedUrl = new URL(url);
+        
+        console.log(`正在测试IP ${ip} 端口 ${port}`);
+        
+        const startTime = Date.now();
+        let downloadedBytes = 0;
+        let isCompleted = false;
+        
+        const socket = new net.Socket();
+        let client;
+        let speedTestTimer;
+
+        const cleanup = () => {
+            if (speedTestTimer) clearTimeout(speedTestTimer);
+            if (client) {
+                client.removeAllListeners();
+                client.destroy();
+            }
+            socket.removeAllListeners();
+            socket.destroy();
+        };
+
+        socket.connect(port, ip, () => {
+            if (options.tls) {
+                client = tls.connect({
+                    socket: socket,
+                    servername: parsedUrl.hostname,
+                    host: parsedUrl.hostname,
+                    port: parsedUrl.port || 443
+                });
+            } else {
+                client = socket;
+            }
+
+            const headers = {
+                'Host': parsedUrl.host,
+                'User-Agent': 'Mozilla/5.0',
+                'Referer': 'https://speed.cloudflare.com/',
+                'Connection': 'close'
+            };
+
+            const requestLine = `GET ${parsedUrl.pathname + parsedUrl.search} HTTP/1.1\r\n`;
+            const headerLines = Object.entries(headers)
+                .map(([k, v]) => `${k}: ${v}\r\n`).join('');
+            const request = requestLine + headerLines + '\r\n';
+
+            // 设置5秒测速超时
+            speedTestTimer = setTimeout(() => {
+                if (!isCompleted) {
+                    isCompleted = true;
+                    const duration = (Date.now() - startTime) / 1000;
+                    const speed = (downloadedBytes / duration) / 1024;
+                    
+                    console.log(`IP ${ip} 端口 ${port} 测速超时，速度 ${speed.toFixed(0)} kB/s`);
+                    cleanup();
+                    resolve(speed);
+                }
+            }, 5000);
+
+            client.on('data', (chunk) => {
+                if (!isCompleted) {
+                    downloadedBytes += chunk.length;
+                }
+            });
+
+            client.on('end', () => {
+                if (!isCompleted) {
+                    isCompleted = true;
+                    clearTimeout(speedTestTimer);
+                    const duration = (Date.now() - startTime) / 1000;
+                    const speed = (downloadedBytes / duration) / 1024;
+                    
+                    console.log(`IP ${ip} 端口 ${port} 下载速度 ${speed.toFixed(0)} kB/s`);
+                    cleanup();
+                    resolve(speed);
+                }
+            });
+
+            client.on('error', () => {
+                if (!isCompleted) {
+                    isCompleted = true;
+                    clearTimeout(speedTestTimer);
+                    cleanup();
+                    resolve(0);
+                }
+            });
+
+            client.write(request);
+        });
+
+        socket.on('error', () => {
+            if (!isCompleted) {
+                isCompleted = true;
+                clearTimeout(speedTestTimer);
+                cleanup();
+                resolve(0);
+            }
+        });
+
+        socket.setTimeout(5000);
+        socket.on('timeout', () => {
+            if (!isCompleted) {
+                isCompleted = true;
+                clearTimeout(speedTestTimer);
+                cleanup();
+                resolve(0);
+            }
+        });
+    });
+}
+
+// 测速
+async function speedTest(results) {
+    const speedResults = [];
+    const queue = [...results];
+    const activePromises = new Set();
+    let completed = 0;
+    const total = results.length;
+
+    return new Promise((resolve) => {
+        function next() {
+            while (activePromises.size < options.speedtest && queue.length > 0) {
+                const item = queue.shift();
+                const promise = getDownloadSpeed(item.ip, item.port).then(speed => {
+                    speedResults.push({
+                        ...item,
+                        downloadSpeed: speed
+                    });
+                    activePromises.delete(promise);
+                    completed++;
+                    const percentage = (completed / total * 100).toFixed(2);
+                    process.stdout.write(`\r测速进度: ${percentage}%`);
+                    
+                    if (completed === total) {
+                        console.log(`\n测速完成: 100%`);
+                    }
+                    
+                    next();
+                });
+                activePromises.add(promise);
+            }
+
+            if (completed === total && activePromises.size === 0) {
+                resolve(speedResults);
+            }
+        }
+
+        next();
+    });
+}
+
+// 写入CSV文件
+async function writeCSV(results) {
+    const headers = options.speedtest > 0 
+        ? ['IP地址', '端口号', 'TLS', '数据中心', '源IP位置', '地区', '城市', '地区(中文)', '国家', '城市(中文)', '国旗', '网络延迟', '下载速度', '出站IP', 'IP类型', '访问协议', 'TLS版本', 'SNI', 'HTTP版本', 'WARP', 'Gateway', 'RBI', '密钥交换', '时间戳']
+        : ['IP地址', '端口号', 'TLS', '数据中心', '源IP位置', '地区', '城市', '地区(中文)', '国家', '城市(中文)', '国旗', '网络延迟', '出站IP', 'IP类型', '访问协议', 'TLS版本', 'SNI', 'HTTP版本', 'WARP', 'Gateway', 'RBI', '密钥交换', '时间戳'];
+
+    const csvRows = [headers.join(',')];
+
+    for (const res of results) {
+        const row = [
+            res.ip,
+            res.port,
+            options.tls ? 'true' : 'false',
+            res.dataCenter || '',
+            res.locCode || '',
+            res.region || '',
+            res.city || '',
+            res.region_zh || '',
+            res.country || '',
+            res.city_zh || '',
+            res.emoji || '',
+            res.latency || '',
+            ...(options.speedtest > 0 ? [res.downloadSpeed ? `${res.downloadSpeed.toFixed(0)} kB/s` : ''] : []),
+            res.outboundIP || '',
+            res.ipType || '',
+            res.visitScheme || '',
+            res.tlsVersion || '',
+            res.sni || '',
+            res.httpVersion || '',
+            res.warp || '',
+            res.gateway || '',
+            res.rbi || '',
+            res.kex || '',
+            res.timestamp || ''
+        ];
+        
+        // 转义CSV中的逗号和引号
+        const escapedRow = row.map(cell => {
+            const cellStr = String(cell);
+            if (cellStr.includes(',') || cellStr.includes('"') || cellStr.includes('\n')) {
+                return `"${cellStr.replace(/"/g, '""')}"`;
+            }
+            return cellStr;
+        }).join(',');
+        
+        csvRows.push(escapedRow);
+    }
+
+    const outputPath = join(__dirname, options.outfile);
+    await fs.promises.writeFile(outputPath, csvRows.join('\n'), 'utf8');
+}
+
+// 主函数
+async function main() {
+    console.log('Cloudflare IP 测试工具 (Node.js ES6 版)');
+    startTime = Date.now();
+
+    // 解析命令行参数
+    parseArgs();
+    
+    // 如果没有通过命令行指定文件，默认使用 init.csv
+    if (process.argv.slice(2).length === 0) {
+        options.file = 'init.csv';
+    }
+
+    // 加载位置信息
+    await loadLocations();
+
+    // 读取IP列表
+    try {
+        console.log(`正在从 ${options.file} 读取IP地址...`);
+        const ips = await readIPs(options.file);
+        if (ips.length === 0) {
+            console.error('没有找到有效的IP地址');
+            return;
+        }
+
+        console.log(`共读取到 ${ips.length} 个IP地址`);
+
+        // 并发测试
+        const results = await testIPs(ips);
+
+        if (results.length === 0) {
+            console.log('没有发现有效的IP');
+            return;
+        }
+
+        console.log(`找到符合条件的IP共 ${results.length} 个`);
+
+        // 测速
+        let finalResults = results;
+        if (options.speedtest > 0) {
+            console.log('开始测速...');
+            finalResults = await speedTest(results);
+        }
+
+        // 排序
+        if (options.speedtest > 0) {
+            finalResults.sort((a, b) => b.downloadSpeed - a.downloadSpeed);
+        } else {
+            finalResults.sort((a, b) => a.tcpDuration - b.tcpDuration);
+        }
+
+        // 写入CSV
+        await writeCSV(finalResults);
+
+        const elapsed = Math.floor((Date.now() - startTime) / 1000);
+        console.log(`\n有效IP数量: ${validCount} | 成功将结果写入文件 ${options.outfile}，耗时 ${elapsed}秒`);
+    } catch (err) {
+        console.error('程序执行出错:', err.message);
+        process.exit(1);
+    }
+}
+
+// 启动程序
+await main();
