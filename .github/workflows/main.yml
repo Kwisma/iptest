@@ -102,9 +102,9 @@ jobs:
           fetch-depth: 0 # 获取完整提交历史
 
       - name: Setup Go
-        uses: actions/setup-go@v4
+        uses: actions/setup-go@v6
         with:
-          go-version: "1.20" # 根据你的需求设置Go版本
+          go-version: "1.24.4" # 根据你的需求设置Go版本
           cache: false
 
       - name: Create Release Assets Directory
