@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"github.com/oschwald/geoip2-golang"
 	"io"
 	"io/ioutil"
 	"net"
@@ -40,29 +41,31 @@ var (
 )
 
 type result struct {
-	ip          string        // IP地址
-	port        int           // 端口
-	dataCenter  string        // 数据中心
-	locCode     string        // 源IP位置
-	region      string        // 地区
-	city        string        // 城市
-	region_zh   string        // 地区
-	country     string        // 国家
-	city_zh     string        // 城市
-	emoji       string        // 国旗
-	latency     string        // 延迟
-	tcpDuration time.Duration // TCP请求延迟
-	outboundIP  string // 出站IP
-	ipType      string // IP类型 (IPv4/IPv6)
-	visitScheme string // 访问协议
-	tlsVersion  string // TLS版本
-	sni         string // SNI
-	httpVersion string // HTTP版本
-	warp        string // WARP状态
-	gateway     string // Gateway状态
-	rbi         string // RBI状态
-	kex         string // 密钥交换
-	timestamp   string // 时间戳
+	ip                           string        // IP地址
+	port                         int           // 端口
+	dataCenter                   string        // 数据中心
+	locCode                      string        // 源IP位置
+	region                       string        // 地区
+	city                         string        // 城市
+	region_zh                    string        // 地区
+	country                      string        // 国家
+	city_zh                      string        // 城市
+	emoji                        string        // 国旗
+	latency                      string        // 延迟
+	tcpDuration                  time.Duration // TCP请求延迟
+	outboundIP                   string        // 出站IP
+	ipType                       string        // IP类型 (IPv4/IPv6)
+	visitScheme                  string        // 访问协议
+	tlsVersion                   string        // TLS版本
+	sni                          string        // SNI
+	httpVersion                  string        // HTTP版本
+	warp                         string        // WARP状态
+	gateway                      string        // Gateway状态
+	rbi                          string        // RBI状态
+	kex                          string        // 密钥交换
+	timestamp                    string        // 时间戳
+	autonomousSystemNumber       uint          // ASN号码
+	autonomousSystemOrganization string        // ASN组织名称
 }
 
 type speedtestresult struct {
@@ -95,6 +98,28 @@ func increaseMaxOpenFiles() {
 	}
 }
 
+// 下载ASN数据库
+func downloadASNDatabase() error {
+	fmt.Println("正在下载 GeoLite2-ASN.mmdb...")
+	resp, err := http.Get("https://jsd.onmicrosoft.cn/gh/seketiti/GeoLiet2@release/GeoLite2-ASN.mmdb")
+	if err != nil {
+		return fmt.Errorf("下载失败: %v", err)
+	}
+	defer resp.Body.Close()
+
+	data, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("读取数据失败: %v", err)
+	}
+
+	err = ioutil.WriteFile("GeoLite2-ASN.mmdb", data, 0644)
+	if err != nil {
+		return fmt.Errorf("保存文件失败: %v", err)
+	}
+
+	fmt.Println("GeoLite2-ASN.mmdb 下载完成")
+	return nil
+}
 func main() {
 	flag.Parse()
 	var validCount int32 // 有效IP计数器
@@ -162,6 +187,29 @@ func main() {
 	}
 
 	locationMap := make(map[string]location)
+	// 加载ASN数据库
+	var asnDB *geoip2.Reader
+	var dbErr error
+
+	// 检查ASN数据库文件是否存在
+	if _, err := os.Stat("GeoLite2-ASN.mmdb"); os.IsNotExist(err) {
+		fmt.Println("ASN数据库文件不存在，尝试下载...")
+		dbErr = downloadASNDatabase()
+		if dbErr != nil {
+			fmt.Printf("下载ASN数据库失败: %v\n", dbErr)
+		} else {
+			fmt.Println("ASN数据库下载成功")
+		}
+	}
+
+	// 尝试打开ASN数据库
+	asnDB, dbErr = geoip2.Open("GeoLite2-ASN.mmdb")
+	if dbErr != nil {
+		fmt.Printf("警告: 打开ASN数据库失败: %v (ASN信息将不可用)\n", dbErr)
+	} else {
+		defer asnDB.Close()
+		fmt.Println("ASN数据库加载成功")
+	}
 	for _, loc := range locations {
 		locationMap[loc.Iata] = loc
 	}
@@ -290,7 +338,6 @@ func main() {
 				return
 			}
 
-			// 修改开始：获取响应字符串并解析
 			bodyStr := body.String()
 
 			if strings.Contains(bodyStr, "uag=Mozilla/5.0") {
@@ -305,27 +352,42 @@ func main() {
 					// 记录通过延迟检查的有效IP
 					atomic.AddInt32(&validCount, 1)
 					outboundIP := responseData["ip"]
+					var asn uint = 0
+					var asnOrg string = ""
+
+					if asnDB != nil {
+						ip := net.ParseIP(outboundIP)
+						if ip != nil {
+							record, err := asnDB.ASN(ip)
+							if err == nil {
+								asn = record.AutonomousSystemNumber
+								asnOrg = record.AutonomousSystemOrganization
+							}
+						}
+					}
+
 					ipType := getIPType(outboundIP)
 
-					// 创建result对象，包含所有新字段
 					res := result{
-						ip:          ipAddr,
-						port:        port,
-						dataCenter:  dataCenter,
-						locCode:     locCode,
-						latency:     fmt.Sprintf("%d ms", tcpDuration.Milliseconds()),
-						tcpDuration: tcpDuration,
-						outboundIP:  outboundIP,
-						ipType:      ipType,
-						visitScheme: responseData["visit_scheme"],
-						tlsVersion:  responseData["tls"],
-						sni:         responseData["sni"],
-						httpVersion: responseData["http"],
-						warp:        responseData["warp"],
-						gateway:     responseData["gateway"],
-						rbi:         responseData["rbi"],
-						kex:         responseData["kex"],
-						timestamp:   responseData["ts"],
+						ip:                           ipAddr,
+						port:                         port,
+						dataCenter:                   dataCenter,
+						locCode:                      locCode,
+						latency:                      fmt.Sprintf("%d ms", tcpDuration.Milliseconds()),
+						tcpDuration:                  tcpDuration,
+						outboundIP:                   outboundIP,
+						ipType:                       ipType,
+						visitScheme:                  responseData["visit_scheme"],
+						tlsVersion:                   responseData["tls"],
+						sni:                          responseData["sni"],
+						httpVersion:                  responseData["http"],
+						warp:                         responseData["warp"],
+						gateway:                      responseData["gateway"],
+						rbi:                          responseData["rbi"],
+						kex:                          responseData["kex"],
+						timestamp:                    responseData["ts"],
+						autonomousSystemNumber:       asn,
+						autonomousSystemOrganization: asnOrg,
 					}
 
 					if ok {
@@ -335,8 +397,8 @@ func main() {
 						res.country = loc.Country
 						res.city_zh = loc.City_zh
 						res.emoji = loc.Emoji
-						fmt.Printf("发现有效IP %s 端口 %d 位置信息 %s 出站IP %s (%s) 延迟 %d 毫秒\n",
-							ipAddr, port, loc.City_zh, outboundIP, ipType, tcpDuration.Milliseconds())
+						fmt.Printf("发现有效IP %s 端口 %d 位置信息 %s 出站类型 %s 延迟 %d 毫秒\n",
+							ipAddr, port, loc.City_zh, ipType, tcpDuration.Milliseconds())
 						// 输出完整的响应内容
 						// fmt.Printf("========== Cloudflare Trace 响应 ==========\n")
 						// fmt.Printf("IP地址: %s 端口: %d\n", ipAddr, port)
@@ -351,7 +413,6 @@ func main() {
 					resultChan <- res
 				}
 			}
-			// 修改结束
 		}(ip)
 	}
 
@@ -420,7 +481,6 @@ func main() {
 
 	writer := csv.NewWriter(file)
 
-	// 修改表头，添加新字段
 	if *speedTest > 0 {
 		writer.Write([]string{
 			"IP地址", "端口号", "TLS", "数据中心", "源IP位置",
@@ -428,6 +488,7 @@ func main() {
 			"网络延迟", "下载速度",
 			"出站IP", "IP类型", "访问协议", "TLS版本", "SNI", "HTTP版本",
 			"WARP", "Gateway", "RBI", "密钥交换", "时间戳",
+			"ASN号码", "ASN组织",
 		})
 	} else {
 		writer.Write([]string{
@@ -436,10 +497,10 @@ func main() {
 			"网络延迟",
 			"出站IP", "IP类型", "访问协议", "TLS版本", "SNI", "HTTP版本",
 			"WARP", "Gateway", "RBI", "密钥交换", "时间戳",
+			"ASN号码", "ASN组织",
 		})
 	}
 
-	// 修改数据写入，添加新字段的值
 	for _, res := range results {
 		if *speedTest > 0 {
 			writer.Write([]string{
@@ -467,6 +528,8 @@ func main() {
 				res.result.rbi,
 				res.result.kex,
 				res.result.timestamp,
+				strconv.FormatUint(uint64(res.result.autonomousSystemNumber), 10),
+				res.result.autonomousSystemOrganization,
 			})
 		} else {
 			writer.Write([]string{
@@ -493,6 +556,8 @@ func main() {
 				res.result.rbi,
 				res.result.kex,
 				res.result.timestamp,
+				strconv.FormatUint(uint64(res.result.autonomousSystemNumber), 10),
+				res.result.autonomousSystemOrganization,
 			})
 		}
 	}
@@ -620,15 +685,15 @@ func parseTraceResponse(body string) map[string]string {
 	return result
 }
 func getIPType(ip string) string {
-    if ip == "" {
-        return "未知"
-    }
-    parsedIP := net.ParseIP(ip)
-    if parsedIP == nil {
-        return "无效IP"
-    }
-    if parsedIP.To4() != nil {
-        return "IPv4"
-    }
-    return "IPv6"
+	if ip == "" {
+		return "未知"
+	}
+	parsedIP := net.ParseIP(ip)
+	if parsedIP == nil {
+		return "无效IP"
+	}
+	if parsedIP.To4() != nil {
+		return "IPv4"
+	}
+	return "IPv6"
 }

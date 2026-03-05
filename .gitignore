@@ -10,3 +10,5 @@ ip_*.txt
 package-lock.json
 proxyip_*.txt
 vless_*.txt
+GeoLite2-ASN.mmdb
+iptest

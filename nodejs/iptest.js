@@ -1,4 +1,4 @@
-
+import maxmind from 'maxmind';
 import fs from 'fs';
 import net from 'net';
 import tls from 'tls';
@@ -24,7 +24,7 @@ const options = {
     speedtest: 5,
     url: 'speed.cloudflare.com/__down?bytes=500000000',
     tls: true,
-    delay: 0
+    delay: 0,
 };
 
 // 全局变量
@@ -79,13 +79,13 @@ async function httpGet(url) {
 
         const req = protocol.get(url, { signal: controller.signal }, (res) => {
             let data = '';
-            res.on('data', chunk => data += chunk);
+            res.on('data', (chunk) => (data += chunk));
             res.on('end', () => {
                 clearTimeout(timeoutId);
                 resolve(data);
             });
         });
-        
+
         req.on('error', (err) => {
             clearTimeout(timeoutId);
             reject(err);
@@ -97,7 +97,7 @@ async function httpGet(url) {
 async function loadLocations() {
     try {
         const locationsPath = join(__dirname, 'locations.json');
-        
+
         if (fs.existsSync(locationsPath)) {
             console.log('本地 locations.json 已存在，无需重新下载');
             const data = await fs.promises.readFile(locationsPath, 'utf8');
@@ -118,10 +118,55 @@ async function loadLocations() {
     }
 }
 
+// 下载ASN数据库
+async function downloadASNDatabase() {
+    console.log('正在下载 GeoLite2-ASN.mmdb...');
+
+    const url = 'https://jsd.onmicrosoft.cn/gh/seketiti/GeoLiet2@release/GeoLite2-ASN.mmdb';
+    const dbPath = join(__dirname, 'GeoLite2-ASN.mmdb');
+
+    return new Promise((resolve, reject) => {
+        const file = fs.createWriteStream(dbPath);
+
+        https.get(url, (res) => {
+            res.pipe(file);
+
+            file.on('finish', () => {
+                file.close(() => {
+                    console.log('GeoLite2-ASN.mmdb 下载完成');
+                    resolve(dbPath);
+                });
+            });
+        }).on('error', (err) => {
+            fs.unlink(dbPath, () => {});
+            reject(err);
+        });
+    });
+}
+// 加载ASN数据库
+let asnDB = null;
+const asnDBPath = join(__dirname, 'GeoLite2-ASN.mmdb');
+
+if (!fs.existsSync(asnDBPath)) {
+    try {
+        await downloadASNDatabase();
+    } catch (err) {
+        console.error(err.message);
+    }
+}
+
+if (fs.existsSync(asnDBPath)) {
+    try {
+        asnDB = await maxmind.open(asnDBPath);
+        console.log('ASN数据库加载成功');
+    } catch (err) {
+        console.error('加载ASN数据库失败:', err.message);
+    }
+}
 // 读取IP列表
 async function readIPs(filename) {
     const filePath = join(__dirname, filename);
-    
+
     if (!fs.existsSync(filePath)) {
         throw new Error(`文件 ${filename} 不存在`);
     }
@@ -130,7 +175,7 @@ async function readIPs(filename) {
     const fileStream = fs.createReadStream(filePath);
     const rl = readline.createInterface({
         input: fileStream,
-        crlfDelay: Infinity
+        crlfDelay: Infinity,
     });
 
     let isFirstLine = true;
@@ -143,7 +188,7 @@ async function readIPs(filename) {
 
         // 解析 CSV 行
         const values = parseCSVLine(trimmed);
-        
+
         // 处理表头
         if (isFirstLine) {
             isFirstLine = false;
@@ -157,7 +202,7 @@ async function readIPs(filename) {
                     portColIndex = i;
                 }
             }
-            
+
             if (ipColIndex === -1 || portColIndex === -1) {
                 throw new Error('CSV文件中未找到IP或端口列');
             }
@@ -168,7 +213,7 @@ async function readIPs(filename) {
         if (values.length > Math.max(ipColIndex, portColIndex)) {
             const ip = values[ipColIndex].trim();
             const portStr = values[portColIndex].trim();
-            
+
             if (!ip || !portStr) continue;
 
             const port = parseInt(portStr);
@@ -189,10 +234,10 @@ function parseCSVLine(line) {
     const values = [];
     let current = '';
     let inQuotes = false;
-    
+
     for (let i = 0; i < line.length; i++) {
         const char = line[i];
-        
+
         if (char === '"') {
             if (inQuotes && line[i + 1] === '"') {
                 // 转义的引号
@@ -210,10 +255,10 @@ function parseCSVLine(line) {
             current += char;
         }
     }
-    
+
     // 添加最后一个值
     values.push(current);
-    
+
     return values;
 }
 
@@ -224,7 +269,7 @@ async function testSingleIP(ip, port) {
         let timeoutId;
 
         const socket = new net.Socket();
-        
+
         const cleanup = () => {
             if (timeoutId) clearTimeout(timeoutId);
             socket.removeAllListeners();
@@ -237,10 +282,10 @@ async function testSingleIP(ip, port) {
         }, TIMEOUT);
 
         socket.setTimeout(TIMEOUT);
-        
+
         socket.on('connect', async () => {
             const tcpDuration = Date.now() - start;
-            
+
             // 延迟过滤
             if (options.delay > 0 && tcpDuration > options.delay) {
                 cleanup();
@@ -278,7 +323,7 @@ function formatTimestamp(date) {
     const hours = String(date.getHours()).padStart(2, '0');
     const minutes = String(date.getMinutes()).padStart(2, '0');
     const seconds = String(date.getSeconds()).padStart(2, '0');
-    
+
     return `${year}-${month}-${day}_${hours}:${minutes}:${seconds}`;
 }
 // 发送HTTP请求
@@ -286,18 +331,18 @@ function makeHTTPRequest(socket, ip, port, tcpDuration) {
     return new Promise((resolve, reject) => {
         const protocol = options.tls ? 'https' : 'http';
         const requestURL = `${protocol}://${REQUEST_URL}`;
-        
+
         const parsedUrl = new URL(requestURL);
         const headers = {
-            'Host': parsedUrl.host,
+            Host: parsedUrl.host,
             'User-Agent': 'Mozilla/5.0',
-            'Connection': 'close'
+            Connection: 'close',
         };
 
         const requestOptions = {
             method: 'GET',
             path: parsedUrl.pathname + parsedUrl.search,
-            headers: headers
+            headers: headers,
         };
 
         let client;
@@ -306,7 +351,7 @@ function makeHTTPRequest(socket, ip, port, tcpDuration) {
                 socket: socket,
                 servername: parsedUrl.hostname,
                 host: parsedUrl.hostname,
-                port: parsedUrl.port || 443
+                port: parsedUrl.port || 443,
             });
         } else {
             client = socket;
@@ -324,21 +369,21 @@ function makeHTTPRequest(socket, ip, port, tcpDuration) {
 
         client.on('end', () => {
             clearTimeout(timeoutId);
-            
+
             // 解析响应
             if (responseData.includes('uag=Mozilla/5.0')) {
                 const coloMatch = responseData.match(/colo=([A-Z]+)/);
                 const locMatch = responseData.match(/loc=([A-Z]+)/);
-                
+
                 if (coloMatch && locMatch) {
                     const dataCenter = coloMatch[1];
                     const locCode = locMatch[1];
-                    
+
                     // 解析所有字段
                     const parsedData = parseTraceResponse(responseData);
-                    
+
                     const loc = locationMap.get(dataCenter);
-                    
+
                     const outboundIP = parsedData.ip || '';
                     const ipType = getIPType(outboundIP);
                     let formattedTimestamp = '';
@@ -346,14 +391,30 @@ function makeHTTPRequest(socket, ip, port, tcpDuration) {
                         const timestamp = parseInt(parsedData.ts);
                         if (!isNaN(timestamp)) {
                             // 判断是秒级还是毫秒级时间戳
-                            const date = timestamp > 10000000000 
-                                ? new Date(timestamp) // 毫秒级时间戳
-                                : new Date(timestamp * 1000); // 秒级时间戳
+                            const date =
+                                timestamp > 10000000000
+                                    ? new Date(timestamp) // 毫秒级时间戳
+                                    : new Date(timestamp * 1000); // 秒级时间戳
                             formattedTimestamp = formatTimestamp(date);
                         } else {
                             formattedTimestamp = parsedData.ts; // 如果不是数字，保留原值
                         }
                     }
+                    // 查询ASN信息
+                    let asn = 0;
+                    let asnOrg = '';
+                    if (asnDB && outboundIP && outboundIP !== '未知' && outboundIP !== '无效IP') {
+                        try {
+                            const asnResult = asnDB.get(outboundIP);
+                            if (asnResult) {
+                                asn = asnResult.autonomous_system_number || 0;
+                                asnOrg = asnResult.autonomous_system_organization || '';
+                            }
+                        } catch (err) {
+                            // 忽略ASN查询错误
+                        }
+                    }
+
                     const result = {
                         ip,
                         port,
@@ -377,10 +438,12 @@ function makeHTTPRequest(socket, ip, port, tcpDuration) {
                         region_zh: loc?.region_zh || '',
                         country: loc?.country || '',
                         city_zh: loc?.city_zh || '',
-                        emoji: loc?.emoji || ''
+                        emoji: loc?.emoji || '',
+                        asn,
+                        asnOrg,
                     };
-                    
-                    console.log(`\n发现有效IP ${ip} 端口 ${port} 位置信息 ${result.city_zh} 出站IP ${outboundIP} (${ipType}) 延迟 ${tcpDuration} 毫秒`);
+
+                    console.log(`\n发现有效IP ${ip} 端口 ${port} 位置信息 ${result.city_zh} 出站类型 ${ipType} 延迟 ${tcpDuration} 毫秒`);
                     resolve(result);
                 } else {
                     reject(new Error('Invalid response format'));
@@ -398,9 +461,10 @@ function makeHTTPRequest(socket, ip, port, tcpDuration) {
         // 发送请求
         const requestLine = `GET ${requestOptions.path} HTTP/1.1\r\n`;
         const headerLines = Object.entries(requestOptions.headers)
-            .map(([k, v]) => `${k}: ${v}\r\n`).join('');
+            .map(([k, v]) => `${k}: ${v}\r\n`)
+            .join('');
         const request = requestLine + headerLines + '\r\n';
-        
+
         client.write(request);
     });
 }
@@ -409,11 +473,11 @@ function makeHTTPRequest(socket, ip, port, tcpDuration) {
 function parseTraceResponse(body) {
     const result = {};
     const lines = body.split('\n');
-    
+
     for (const line of lines) {
         const trimmed = line.trim();
         if (!trimmed) continue;
-        
+
         const parts = trimmed.split('=');
         if (parts.length >= 2) {
             const key = parts[0].trim();
@@ -421,14 +485,14 @@ function parseTraceResponse(body) {
             result[key] = value;
         }
     }
-    
+
     return result;
 }
 
 // 获取IP类型
 function getIPType(ip) {
     if (!ip) return '未知';
-    
+
     if (net.isIPv4(ip)) return 'IPv4';
     if (net.isIPv6(ip)) return 'IPv6';
     return '无效IP';
@@ -446,20 +510,20 @@ async function testIPs(ips) {
         function next() {
             while (activePromises.size < options.maxThreads && queue.length > 0) {
                 const item = queue.shift();
-                const promise = testSingleIP(item.ip, item.port).then(result => {
+                const promise = testSingleIP(item.ip, item.port).then((result) => {
                     if (result) {
                         results.push(result);
                         validCount++;
                     }
                     activePromises.delete(promise);
                     completed++;
-                    const percentage = (completed / total * 100).toFixed(2);
+                    const percentage = ((completed / total) * 100).toFixed(2);
                     process.stdout.write(`\r已完成: ${completed} 总数: ${total} 已完成: ${percentage}%`);
-                    
+
                     if (completed === total) {
                         console.log(`\n已完成: ${completed} 总数: ${total} 已完成: 100.00%`);
                     }
-                    
+
                     next();
                 });
                 activePromises.add(promise);
@@ -480,13 +544,13 @@ async function getDownloadSpeed(ip, port) {
         const protocol = options.tls ? 'https' : 'http';
         const url = `${protocol}://${options.url}`;
         const parsedUrl = new URL(url);
-        
+
         console.log(`正在测试IP ${ip} 端口 ${port}`);
-        
+
         const startTime = Date.now();
         let downloadedBytes = 0;
         let isCompleted = false;
-        
+
         const socket = new net.Socket();
         let client;
         let speedTestTimer;
@@ -507,22 +571,23 @@ async function getDownloadSpeed(ip, port) {
                     socket: socket,
                     servername: parsedUrl.hostname,
                     host: parsedUrl.hostname,
-                    port: parsedUrl.port || 443
+                    port: parsedUrl.port || 443,
                 });
             } else {
                 client = socket;
             }
 
             const headers = {
-                'Host': parsedUrl.host,
+                Host: parsedUrl.host,
                 'User-Agent': 'Mozilla/5.0',
-                'Referer': 'https://speed.cloudflare.com/',
-                'Connection': 'close'
+                Referer: 'https://speed.cloudflare.com/',
+                Connection: 'close',
             };
 
             const requestLine = `GET ${parsedUrl.pathname + parsedUrl.search} HTTP/1.1\r\n`;
             const headerLines = Object.entries(headers)
-                .map(([k, v]) => `${k}: ${v}\r\n`).join('');
+                .map(([k, v]) => `${k}: ${v}\r\n`)
+                .join('');
             const request = requestLine + headerLines + '\r\n';
 
             // 设置5秒测速超时
@@ -530,8 +595,8 @@ async function getDownloadSpeed(ip, port) {
                 if (!isCompleted) {
                     isCompleted = true;
                     const duration = (Date.now() - startTime) / 1000;
-                    const speed = (downloadedBytes / duration) / 1024;
-                    
+                    const speed = downloadedBytes / duration / 1024;
+
                     console.log(`IP ${ip} 端口 ${port} 速度 ${speed.toFixed(0)} kB/s`);
                     cleanup();
                     resolve(speed);
@@ -549,8 +614,8 @@ async function getDownloadSpeed(ip, port) {
                     isCompleted = true;
                     clearTimeout(speedTestTimer);
                     const duration = (Date.now() - startTime) / 1000;
-                    const speed = (downloadedBytes / duration) / 1024;
-                    
+                    const speed = downloadedBytes / duration / 1024;
+
                     console.log(`IP ${ip} 端口 ${port} 下载速度 ${speed.toFixed(0)} kB/s`);
                     cleanup();
                     resolve(speed);
@@ -602,20 +667,20 @@ async function speedTest(results) {
         function next() {
             while (activePromises.size < options.speedtest && queue.length > 0) {
                 const item = queue.shift();
-                const promise = getDownloadSpeed(item.ip, item.port).then(speed => {
+                const promise = getDownloadSpeed(item.ip, item.port).then((speed) => {
                     speedResults.push({
                         ...item,
-                        downloadSpeed: speed
+                        downloadSpeed: speed,
                     });
                     activePromises.delete(promise);
                     completed++;
-                    const percentage = (completed / total * 100).toFixed(2);
+                    const percentage = ((completed / total) * 100).toFixed(2);
                     process.stdout.write(`\r测速进度: ${percentage}%`);
-                    
+
                     if (completed === total) {
                         console.log(`\n测速完成: 100%`);
                     }
-                    
+
                     next();
                 });
                 activePromises.add(promise);
@@ -632,10 +697,63 @@ async function speedTest(results) {
 
 // 写入CSV文件
 async function writeCSV(results) {
-    const headers = options.speedtest > 0 
-        ? ['IP地址', '端口号', 'TLS', '数据中心', '源IP位置', '地区', '城市', '地区(中文)', '国家', '城市(中文)', '国旗', '网络延迟', '下载速度', '出站IP', 'IP类型', '访问协议', 'TLS版本', 'SNI', 'HTTP版本', 'WARP', 'Gateway', 'RBI', '密钥交换', '时间戳']
-        : ['IP地址', '端口号', 'TLS', '数据中心', '源IP位置', '地区', '城市', '地区(中文)', '国家', '城市(中文)', '国旗', '网络延迟', '出站IP', 'IP类型', '访问协议', 'TLS版本', 'SNI', 'HTTP版本', 'WARP', 'Gateway', 'RBI', '密钥交换', '时间戳'];
-
+    const headers =
+        options.speedtest > 0
+            ? [
+                  'IP地址',
+                  '端口号',
+                  'TLS',
+                  '数据中心',
+                  '源IP位置',
+                  '地区',
+                  '城市',
+                  '地区(中文)',
+                  '国家',
+                  '城市(中文)',
+                  '国旗',
+                  '网络延迟',
+                  '下载速度',
+                  '出站IP',
+                  'IP类型',
+                  '访问协议',
+                  'TLS版本',
+                  'SNI',
+                  'HTTP版本',
+                  'WARP',
+                  'Gateway',
+                  'RBI',
+                  '密钥交换',
+                  '时间戳',
+                  'ASN号码',
+                  'ASN组织',
+              ]
+            : [
+                  'IP地址',
+                  '端口号',
+                  'TLS',
+                  '数据中心',
+                  '源IP位置',
+                  '地区',
+                  '城市',
+                  '地区(中文)',
+                  '国家',
+                  '城市(中文)',
+                  '国旗',
+                  '网络延迟',
+                  '出站IP',
+                  'IP类型',
+                  '访问协议',
+                  'TLS版本',
+                  'SNI',
+                  'HTTP版本',
+                  'WARP',
+                  'Gateway',
+                  'RBI',
+                  '密钥交换',
+                  '时间戳',
+                  'ASN号码',
+                  'ASN组织',
+              ];
     const csvRows = [headers.join(',')];
 
     for (const res of results) {
@@ -663,18 +781,22 @@ async function writeCSV(results) {
             res.gateway || '',
             res.rbi || '',
             res.kex || '',
-            res.timestamp || ''
+            res.timestamp || '',
+            res.asn || '0',
+            res.asnOrg || '',
         ];
-        
+
         // 转义CSV中的逗号和引号
-        const escapedRow = row.map(cell => {
-            const cellStr = String(cell);
-            if (cellStr.includes(',') || cellStr.includes('"') || cellStr.includes('\n')) {
-                return `"${cellStr.replace(/"/g, '""')}"`;
-            }
-            return cellStr;
-        }).join(',');
-        
+        const escapedRow = row
+            .map((cell) => {
+                const cellStr = String(cell);
+                if (cellStr.includes(',') || cellStr.includes('"') || cellStr.includes('\n')) {
+                    return `"${cellStr.replace(/"/g, '""')}"`;
+                }
+                return cellStr;
+            })
+            .join(',');
+
         csvRows.push(escapedRow);
     }
 
@@ -689,7 +811,7 @@ async function main() {
 
     // 解析命令行参数
     parseArgs();
-    
+
     // 如果没有通过命令行指定文件，默认使用 init.csv
     if (process.argv.slice(2).length === 0) {
         options.file = 'init.csv';
