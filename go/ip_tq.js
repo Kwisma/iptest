@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import url from "node:url";
-
 // 配置参数
 const CONFIG = {
   perCountryCount: 5, // 每个国家最小记录数，小于此数量的国家不提取
@@ -9,6 +8,7 @@ const CONFIG = {
   minSpeed: 100, // 过滤下载速度下限，单位kb/s
   targetFile: "ip_tq.csv", // 指定要处理的CSV文件名
   outboundType: "all", // 出站IP类型: 'ipv4' (只保存IPv4), 'ipv6' (只保存IPv6), 'all' (都保存)
+  targetAsnOrgs: ["Internet Initiative Japan Inc."], // 目标ASN组织名称数组，仅用于日志输出，不影响保存
 };
 
 // CSV 列名
@@ -18,7 +18,8 @@ const COLUMNS = {
   speed: "下载速度",
   datacenter: "数据中心",
   bronIpLocatie: "源IP位置",
-  outbound: "出站IP", // 这是需要判断的列
+  outbound: "出站IP",
+  asnOrg: "ASN组织",
 };
 
 class CSVProcessor {
@@ -37,6 +38,7 @@ class CSVProcessor {
       await this.validateFileExists(csvFilePath);
       console.log(`开始处理文件: ${this.config.targetFile}`);
       console.log(`出站IP过滤模式: ${this.getOutboundTypeText()}`);
+      console.log(`目标ASN组织 (仅用于日志输出，不影响保存): ${this.config.targetAsnOrgs.join("、")}`);
 
       await this.loadLocations();
       await this.processCSV(
@@ -182,6 +184,13 @@ class CSVProcessor {
     return !isNaN(speedValue) && speedValue >= this.config.minSpeed;
   }
 
+  // 检查是否为目标ASN组织之一（仅用于日志输出）
+  isTargetAsnOrg(asnOrgField) {
+    if (!asnOrgField) return false;
+    const trimmedAsnOrg = asnOrgField.trim();
+    return this.config.targetAsnOrgs.some(target => trimmedAsnOrg === target);
+  }
+
   async processCSV(csvFilePath, txtUnlimitedFilePath, txtLimitedFilePath) {
     console.log(`开始读取 CSV 文件: ${path.basename(csvFilePath)}`);
 
@@ -199,15 +208,24 @@ class CSVProcessor {
     const headers = this.parseCSVLine(lines[0]);
     const indices = this.getColumnIndices(headers);
 
-    // 处理数据行
-    const ipEntries = this.processDataLines(lines.slice(1), indices);
+    // 处理数据行 - 同时生成两种结果
+    const { ipEntries, filteredIpPortList } = this.processDataLines(lines.slice(1), indices);
 
+    // 输出逗号分隔的IP:PORT列表（经过ASN组织过滤的）
+    if (filteredIpPortList.length > 0) {
+      console.log(`\n=== 逗号分隔的IP:PORT列表 (共 ${filteredIpPortList.length} 条，已过滤目标ASN组织) ===`);
+      console.log(JSON.stringify(filteredIpPortList));
+    } else {
+      console.log(`\n没有找到目标ASN组织的IP:PORT记录`);
+    }
+
+    // 后续处理保存的文件（不使用ASN组织过滤）
     if (ipEntries.length === 0) {
-      console.log("没有符合条件的IP记录");
+      console.log("没有符合条件的IP记录用于保存");
       return;
     }
 
-    // 分组处理
+    // 分组处理（按国家）- 用于保存的文件
     const groupedEntries = this.groupEntriesByCountry(ipEntries);
 
     if (Object.keys(groupedEntries).length === 0) {
@@ -215,7 +233,7 @@ class CSVProcessor {
       return;
     }
 
-    // 生成并保存两个版本的结果
+    // 生成并保存两个版本的结果（不使用ASN组织过滤）
     await this.generateAndSaveResults(
       groupedEntries,
       txtUnlimitedFilePath,
@@ -244,16 +262,27 @@ class CSVProcessor {
 
     // 出站IP列是可选的（用于过滤）
     indices[COLUMNS.outbound] = headers.indexOf(COLUMNS.outbound);
+    
+    // ASN组织列是可选的（仅用于日志输出）
+    indices[COLUMNS.asnOrg] = headers.indexOf(COLUMNS.asnOrg);
 
     return indices;
   }
 
   processDataLines(lines, indices) {
-    const ipEntries = [];
+    const ipEntries = []; // 用于保存文件（不使用ASN组织过滤）
+    const filteredIpPortList = []; // 用于日志输出（使用ASN组织过滤）
+    
     let ipv4Count = 0;
     let ipv6Count = 0;
     let filteredByOutboundType = 0;
     let noOutboundIpCount = 0;
+    
+    // 用于统计每个ASN组织的匹配数量（仅用于日志输出）
+    const asnOrgStats = {};
+    this.config.targetAsnOrgs.forEach(org => {
+      asnOrgStats[org] = 0;
+    });
 
     for (const line of lines) {
       if (!line) continue;
@@ -264,6 +293,18 @@ class CSVProcessor {
         Math.max(...Object.values(indices).filter((i) => i !== -1))
       ) {
         continue; // 跳过列数不足的行
+      }
+
+      // 检查ASN组织（仅用于统计和过滤日志输出）
+      let isTargetAsnOrg = false;
+      if (indices[COLUMNS.asnOrg] !== -1) {
+        const asnOrg = fields[indices[COLUMNS.asnOrg]].trim();
+        isTargetAsnOrg = this.isTargetAsnOrg(asnOrg);
+        
+        // 统计匹配的ASN组织（仅用于日志）
+        if (isTargetAsnOrg && asnOrgStats.hasOwnProperty(asnOrg)) {
+          asnOrgStats[asnOrg]++;
+        }
       }
 
       // 获取出站IP用于类型判断
@@ -284,21 +325,21 @@ class CSVProcessor {
           ipv6Count++;
         }
 
-        // 出站IP类型过滤
+        // 出站IP类型过滤（用于保存文件）
         if (!this.shouldIncludeByOutboundType(outboundIp)) {
           filteredByOutboundType++;
           continue;
         }
       } else {
         noOutboundIpCount++;
-        // 如果没有出站IP，根据配置决定是否保留
+        // 如果没有出站IP，根据配置决定是否保留（用于保存文件）
         if (this.config.outboundType !== "all") {
           filteredByOutboundType++;
           continue;
         }
       }
 
-      // 速度过滤
+      // 速度过滤（用于保存文件）
       if (
         indices[COLUMNS.speed] !== -1 &&
         !this.shouldIncludeBySpeed(fields[indices[COLUMNS.speed]])
@@ -306,24 +347,39 @@ class CSVProcessor {
         continue;
       }
 
-      // 提取IP地址和端口（用于输出）
+      // 提取IP地址和端口
       const ip = fields[indices[COLUMNS.ip]].trim();
       const port = fields[indices[COLUMNS.port]];
+      
+      // 如果是目标ASN组织，添加到日志输出列表
+      if (isTargetAsnOrg) {
+        filteredIpPortList.push(`${ip}:${port}`);
+      }
+
+      // 获取国家信息用于分组（用于保存文件）
       const datacenter = fields[indices[COLUMNS.datacenter]];
       const bronIpLocatie = fields[indices[COLUMNS.bronIpLocatie]];
-
       const country = this.getCountryFromLocationData(
         datacenter,
         bronIpLocatie,
       );
 
+      // 添加到保存文件列表（所有记录，不分ASN组织）
       ipEntries.push({
         entry: `${ip}:${port}#${country}`,
         country,
       });
     }
 
-    console.log(`出站IP类型统计:`);
+    console.log(`\nASN组织统计 (仅用于日志输出):`);
+    console.log(`  - 目标ASN组织总数: ${filteredIpPortList.length} 条`);
+    
+    console.log(`\n各目标ASN组织匹配数量:`);
+    for (const [org, count] of Object.entries(asnOrgStats)) {
+      console.log(`  - ${org}: ${count} 条`);
+    }
+
+    console.log(`\n出站IP类型统计 (用于保存文件):`);
     console.log(`  - IPv4: ${ipv4Count} 条`);
     console.log(`  - IPv6: ${ipv6Count} 条`);
     console.log(`  - 无出站IP: ${noOutboundIpCount} 条`);
@@ -333,9 +389,10 @@ class CSVProcessor {
     }
 
     console.log(
-      `IP 和端口提取完成。共 ${ipEntries.length} 条记录 (已应用过滤)`,
+      `\nIP 和端口提取完成。共 ${ipEntries.length} 条记录 (用于保存文件)`,
     );
-    return ipEntries;
+    
+    return { ipEntries, filteredIpPortList };
   }
 
   groupEntriesByCountry(ipEntries) {
@@ -394,7 +451,7 @@ class CSVProcessor {
     const allCountries = Object.keys(groupedEntries).sort();
 
     console.log(
-      `所有国家: ${allCountries.join("、")} (共 ${allCountries.length} 个国家)`,
+      `\n所有国家 (用于保存文件): ${allCountries.join("、")} (共 ${allCountries.length} 个国家)`,
     );
     console.log(
       `符合条件国家 (记录数 >= ${this.config.perCountryCount}): ${filteredCountries.join("、")} (共 ${filteredCountries.length} 个国家)`,
@@ -429,11 +486,11 @@ class CSVProcessor {
 
     console.log(`\n不限制数量版本: ${path.basename(txtUnlimitedFilePath)}`);
     console.log(`  - 包含国家: ${filteredCountries.length} 个`);
-    console.log(`  - 总记录数: ${unlimitedCount} 条`);
+    console.log(`  - 总记录数: ${unlimitedCount} 条 (所有ASN组织)`);
 
     console.log(`\n限制数量版本: ${path.basename(txtLimitedFilePath)}`);
     console.log(`  - 包含国家: ${filteredCountries.length} 个`);
-    console.log(`  - 总记录数: ${limitedCount} 条`);
+    console.log(`  - 总记录数: ${limitedCount} 条 (所有ASN组织)`);
     console.log(`  - 每个国家最多提取: ${this.config.perCountryCount} 条`);
 
     const excludedCountries = allCountries.filter(
@@ -469,6 +526,11 @@ async function main() {
         config.outboundType = value;
         console.log(`通过命令行参数设置: 出站IP过滤模式 = ${value}`);
       }
+    } else if (arg.startsWith("--asnorg=")) {
+      const value = arg.split("=")[1];
+      // 支持逗号分隔的多个ASN组织
+      config.targetAsnOrgs = value.split(',').map(org => org.trim());
+      console.log(`通过命令行参数设置: 目标ASN组织 = ${config.targetAsnOrgs.join("、")}`);
     }
   }
 
