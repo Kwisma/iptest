@@ -486,18 +486,20 @@ func main() {
 			"IP地址", "端口号", "TLS", "数据中心", "源IP位置",
 			"地区", "城市", "地区(中文)", "国家", "城市(中文)", "国旗",
 			"网络延迟", "下载速度",
-			"出站IP", "IP类型", "访问协议", "TLS版本", "SNI", "HTTP版本",
-			"WARP", "Gateway", "RBI", "密钥交换", "时间戳",
+			"出站IP", "IP类型",
 			"ASN号码", "ASN组织",
+			"访问协议", "TLS版本", "SNI", "HTTP版本",
+			"WARP", "Gateway", "RBI", "密钥交换", "时间戳",
 		})
 	} else {
 		writer.Write([]string{
 			"IP地址", "端口号", "TLS", "数据中心", "源IP位置",
 			"地区", "城市", "地区(中文)", "国家", "城市(中文)", "国旗",
 			"网络延迟",
-			"出站IP", "IP类型", "访问协议", "TLS版本", "SNI", "HTTP版本",
-			"WARP", "Gateway", "RBI", "密钥交换", "时间戳",
+			"出站IP", "IP类型",
 			"ASN号码", "ASN组织",
+			"访问协议", "TLS版本", "SNI", "HTTP版本",
+			"WARP", "Gateway", "RBI", "密钥交换", "时间戳",
 		})
 	}
 
@@ -519,6 +521,8 @@ func main() {
 				fmt.Sprintf("%.0f kB/s", res.downloadSpeed),
 				res.result.outboundIP,
 				res.result.ipType,
+				strconv.FormatUint(uint64(res.result.autonomousSystemNumber), 10),
+				res.result.autonomousSystemOrganization,
 				res.result.visitScheme,
 				res.result.tlsVersion,
 				res.result.sni,
@@ -528,8 +532,6 @@ func main() {
 				res.result.rbi,
 				res.result.kex,
 				res.result.timestamp,
-				strconv.FormatUint(uint64(res.result.autonomousSystemNumber), 10),
-				res.result.autonomousSystemOrganization,
 			})
 		} else {
 			writer.Write([]string{
@@ -547,6 +549,8 @@ func main() {
 				res.result.latency,
 				res.result.outboundIP,
 				res.result.ipType,
+				strconv.FormatUint(uint64(res.result.autonomousSystemNumber), 10),
+				res.result.autonomousSystemOrganization,
 				res.result.visitScheme,
 				res.result.tlsVersion,
 				res.result.sni,
@@ -556,8 +560,6 @@ func main() {
 				res.result.rbi,
 				res.result.kex,
 				res.result.timestamp,
-				strconv.FormatUint(uint64(res.result.autonomousSystemNumber), 10),
-				res.result.autonomousSystemOrganization,
 			})
 		}
 	}

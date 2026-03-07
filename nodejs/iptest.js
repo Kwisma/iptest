@@ -715,6 +715,8 @@ async function writeCSV(results) {
                   '下载速度',
                   '出站IP',
                   'IP类型',
+                  'ASN号码',
+                  'ASN组织',
                   '访问协议',
                   'TLS版本',
                   'SNI',
@@ -724,8 +726,6 @@ async function writeCSV(results) {
                   'RBI',
                   '密钥交换',
                   '时间戳',
-                  'ASN号码',
-                  'ASN组织',
               ]
             : [
                   'IP地址',
@@ -742,6 +742,8 @@ async function writeCSV(results) {
                   '网络延迟',
                   '出站IP',
                   'IP类型',
+                  'ASN号码',
+                  'ASN组织',
                   '访问协议',
                   'TLS版本',
                   'SNI',
@@ -751,8 +753,6 @@ async function writeCSV(results) {
                   'RBI',
                   '密钥交换',
                   '时间戳',
-                  'ASN号码',
-                  'ASN组织',
               ];
     const csvRows = [headers.join(',')];
 
@@ -773,6 +773,8 @@ async function writeCSV(results) {
             ...(options.speedtest > 0 ? [res.downloadSpeed ? `${res.downloadSpeed.toFixed(0)} kB/s` : ''] : []),
             res.outboundIP || '',
             res.ipType || '',
+            res.asn || '0',
+            res.asnOrg || '',
             res.visitScheme || '',
             res.tlsVersion || '',
             res.sni || '',
@@ -782,8 +784,6 @@ async function writeCSV(results) {
             res.rbi || '',
             res.kex || '',
             res.timestamp || '',
-            res.asn || '0',
-            res.asnOrg || '',
         ];
 
         // 转义CSV中的逗号和引号
