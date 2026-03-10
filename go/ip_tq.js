@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import url from 'node:url';
+
 // 配置参数
 const CONFIG = {
     perCountryCount: 5, // 每个国家最小记录数，小于此数量的国家不提取
@@ -37,7 +38,7 @@ const COLUMNS = {
     speed: '下载速度',
     datacenter: '数据中心',
     bronIpLocatie: '源IP位置',
-    outbound: '出站IP',
+    outboundtype: 'IP类型',
     asnOrg: 'ASN号码',
 };
 
@@ -102,45 +103,18 @@ class CSVProcessor {
         }
     }
 
-    isIPv4(ip) {
-        return /^(\d{1,3}\.){3}\d{1,3}$/.test(ip);
-    }
-
-    isIPv6(ip) {
-        return ip.includes(':') && !this.isIPv4(ip);
-    }
-
-    // 从可能的IP:端口#国家格式中提取纯IP
-    extractPureIp(ipField) {
-        if (!ipField) return '';
-
-        let pureIp = ipField.trim();
-
-        // 如果包含#国家，移除
-        if (pureIp.includes('#')) {
-            pureIp = pureIp.split('#')[0];
+    // 直接根据字段值判断是否包含
+    shouldIncludeByOutboundType(typeValue) {
+        if (!typeValue) {
+            // 如果没有类型值，根据配置决定
+            return this.config.outboundType === 'all';
         }
-
-        // 如果包含端口（最后一个冒号后面是数字），移除端口
-        if (pureIp.includes(':')) {
-            const lastColonIndex = pureIp.lastIndexOf(':');
-            const afterLastColon = pureIp.substring(lastColonIndex + 1);
-            if (/^\d+$/.test(afterLastColon)) {
-                pureIp = pureIp.substring(0, lastColonIndex);
-            }
-        }
-
-        return pureIp;
-    }
-
-    shouldIncludeByOutboundType(outboundIp) {
-        const pureIp = this.extractPureIp(outboundIp);
 
         switch (this.config.outboundType) {
             case 'ipv4':
-                return this.isIPv4(pureIp);
+                return typeValue === 'IPv4';
             case 'ipv6':
-                return this.isIPv6(pureIp);
+                return typeValue === 'IPv6';
             case 'all':
                 return true;
             default:
@@ -220,12 +194,12 @@ class CSVProcessor {
         // 处理数据行 - 同时生成两种结果
         const { ipEntries, filteredIpPortList } = this.processDataLines(lines.slice(1), indices);
 
-        // 输出逗号分隔的IP:PORT列表（经过ASN组织过滤的）
+        // 输出逗号分隔的IP:PORT列表（经过ASN组织和IPv4过滤）
         if (filteredIpPortList.length > 0) {
-            console.log(`\n=== 逗号分隔的IP:PORT列表 (共 ${filteredIpPortList.length} 条，已过滤目标ASN) ===`);
+            console.log(`\n=== 逗号分隔的IP:PORT列表 (共 ${filteredIpPortList.length} 条，已过滤目标ASN，仅IPv4) ===`);
             console.log(JSON.stringify(filteredIpPortList));
         } else {
-            console.log(`\n没有找到目标ASN的IP:PORT记录`);
+            console.log(`\n没有找到目标ASN的IPv4 IP:PORT记录`);
         }
 
         // 后续处理保存的文件（不使用ASN组织过滤）
@@ -260,8 +234,8 @@ class CSVProcessor {
         // 速度列是可选的
         indices[COLUMNS.speed] = headers.indexOf(COLUMNS.speed);
 
-        // 出站IP列是可选的（用于过滤）
-        indices[COLUMNS.outbound] = headers.indexOf(COLUMNS.outbound);
+        // 出站IP类型列是可选的（用于过滤）
+        indices[COLUMNS.outboundtype] = headers.indexOf(COLUMNS.outboundtype);
 
         // ASN组织列是可选的（仅用于日志输出）
         indices[COLUMNS.asnOrg] = headers.indexOf(COLUMNS.asnOrg);
@@ -271,7 +245,7 @@ class CSVProcessor {
 
     processDataLines(lines, indices) {
         const ipEntries = []; // 用于保存文件（不使用ASN组织过滤）
-        const filteredIpPortList = []; // 用于日志输出（使用ASN组织过滤）
+        const filteredIpPortList = []; // 用于日志输出（使用ASN组织过滤，且只包含IPv4）
 
         let ipv4Count = 0;
         let ipv6Count = 0;
@@ -304,23 +278,22 @@ class CSVProcessor {
                 }
             }
 
-            // 获取出站IP用于类型判断
-            let outboundIp = null;
-            if (indices[COLUMNS.outbound] !== -1 && indices[COLUMNS.outbound] < fields.length) {
-                outboundIp = fields[indices[COLUMNS.outbound]].trim();
+            // 获取出站IP类型
+            let outboundType = null;
+            if (indices[COLUMNS.outboundtype] !== -1 && indices[COLUMNS.outboundtype] < fields.length) {
+                outboundType = fields[indices[COLUMNS.outboundtype]].trim();
             }
 
-            // 统计IP类型（使用出站IP）
-            if (outboundIp) {
-                const pureOutboundIp = this.extractPureIp(outboundIp);
-                if (this.isIPv4(pureOutboundIp)) {
+            // 统计IP类型
+            if (outboundType) {
+                if (outboundType === 'IPv4') {
                     ipv4Count++;
-                } else if (this.isIPv6(pureOutboundIp)) {
+                } else if (outboundType === 'IPv6') {
                     ipv6Count++;
                 }
 
                 // 出站IP类型过滤（用于保存文件）
-                if (!this.shouldIncludeByOutboundType(outboundIp)) {
+                if (!this.shouldIncludeByOutboundType(outboundType)) {
                     filteredByOutboundType++;
                     continue;
                 }
@@ -342,8 +315,8 @@ class CSVProcessor {
             const ip = fields[indices[COLUMNS.ip]].trim();
             const port = fields[indices[COLUMNS.port]];
 
-            // 如果是目标ASN组织，添加到日志输出列表
-            if (isTargetAsnOrg) {
+            // 如果是目标ASN组织且是IPv4类型，添加到日志输出列表
+            if (isTargetAsnOrg && outboundType === 'IPv4') {
                 filteredIpPortList.push(`${ip}:${port}`);
             }
 
@@ -360,9 +333,9 @@ class CSVProcessor {
         }
 
         console.log(`\nASN统计 (仅用于日志输出):`);
-        console.log(`  - 目标ASN总数: ${filteredIpPortList.length} 条`);
+        console.log(`  - 目标ASN总数: ${filteredIpPortList.length} 条 (仅IPv4)`);
 
-        console.log(`\n各目标ASN匹配数量:`);
+        console.log(`\n各目标ASN匹配数量 (仅IPv4):`);
         for (const [org, count] of Object.entries(asnOrgStats)) {
             console.log(`  - ${org}: ${count} 条`);
         }
