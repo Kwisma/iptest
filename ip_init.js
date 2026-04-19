@@ -7,7 +7,7 @@ const __filename = url.fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // 输入 CSV 文件路径
-const csvFilePath = path.resolve(__dirname, '../init.csv');
+const csvFilePath = path.resolve(__dirname, 'init.csv');
 // 输出 TXT 文件路径
 const txtFilePath = path.resolve(__dirname, 'ip.txt');
 

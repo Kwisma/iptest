@@ -9,26 +9,7 @@ const CONFIG = {
     minSpeed: 100, // 过滤下载速度下限，单位kb/s
     targetFile: 'ip_tq.csv', // 指定要处理的CSV文件名
     outboundType: 'all', // 出站IP类型: 'ipv4' (只保存IPv4), 'ipv6' (只保存IPv6), 'all' (都保存)
-    targetAsnOrgs: [
-        //日本
-        '2516',
-        '2527',
-        '2510',
-        '17511',
-        '7679',
-        '55381',
-        '2497',
-        '17676',
-        '10010',
-        '17506',
-        '4713',
-        '7524',
-        '18077',
-        '7670',
-        '2519',
-        //韩国
-        '3786',
-    ],
+    targetAsnOrgs: [],
 };
 
 // CSV 列名
@@ -37,8 +18,8 @@ const COLUMNS = {
     port: '端口号',
     speed: '下载速度',
     datacenter: '数据中心',
-    bronIpLocatie: '源IP位置',
-    outboundtype: 'IP类型',
+    bronIpLocatie: '落地IP位置',
+    outboundtype: '出站IP类型',
     asnOrg: 'ASN号码',
 };
 

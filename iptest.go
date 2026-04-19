@@ -47,14 +47,14 @@ type result struct {
 	locCode                      string        // 源IP位置
 	region                       string        // 地区
 	city                         string        // 城市
-	region_zh                    string        // 地区
+	region_zh                    string        // 地区(中文)
 	country                      string        // 国家
-	city_zh                      string        // 城市
+	city_zh                      string        // 城市(中文)
 	emoji                        string        // 国旗
 	latency                      string        // 延迟
 	tcpDuration                  time.Duration // TCP请求延迟
 	outboundIP                   string        // 出站IP
-	ipType                       string        // IP类型 (IPv4/IPv6)
+	ipType                       string        // 出站IP类型 (IPv4/IPv6)
 	visitScheme                  string        // 访问协议
 	tlsVersion                   string        // TLS版本
 	sni                          string        // SNI
@@ -66,6 +66,7 @@ type result struct {
 	timestamp                    string        // 时间戳
 	autonomousSystemNumber       uint          // ASN号码
 	autonomousSystemOrganization string        // ASN组织名称
+	ipsType                      string        // IPS类型
 }
 
 type speedtestresult struct {
@@ -84,6 +85,11 @@ type location struct {
 	Country   string  `json:"country"`
 	City_zh   string  `json:"city_zh"`
 	Emoji     string  `json:"emoji"`
+}
+type ipapiResponse struct {
+	ASN struct {
+		Type string `json:"type"`
+	} `json:"asn"`
 }
 
 // 尝试提升文件描述符的上限
@@ -354,6 +360,10 @@ func main() {
 					outboundIP := responseData["ip"]
 					var asn uint = 0
 					var asnOrg string = ""
+					var ipsType string
+					if outboundIP != "" {
+						ipsType = queryIPAPI(ipAddr)
+					}
 
 					if asnDB != nil {
 						ip := net.ParseIP(outboundIP)
@@ -388,6 +398,7 @@ func main() {
 						timestamp:                    responseData["ts"],
 						autonomousSystemNumber:       asn,
 						autonomousSystemOrganization: asnOrg,
+						ipsType:                      ipsType,
 					}
 
 					if ok {
@@ -483,20 +494,20 @@ func main() {
 
 	if *speedTest > 0 {
 		writer.Write([]string{
-			"IP地址", "端口号", "TLS", "数据中心", "源IP位置",
-			"地区", "城市", "地区(中文)", "国家", "城市(中文)", "国旗",
+			"IP地址", "端口号", "TLS", "数据中心", "IP位置",
+			"地区", "城市", "地区(中文)", "落地IP位置", "城市(中文)", "国旗",
 			"网络延迟", "下载速度",
-			"出站IP", "IP类型",
+			"出站IP", "出站IP类型", "IPS类型",
 			"ASN号码", "ASN组织",
 			"访问协议", "TLS版本", "SNI", "HTTP版本",
 			"WARP", "Gateway", "RBI", "密钥交换", "时间戳",
 		})
 	} else {
 		writer.Write([]string{
-			"IP地址", "端口号", "TLS", "数据中心", "源IP位置",
-			"地区", "城市", "地区(中文)", "国家", "城市(中文)", "国旗",
+			"IP地址", "端口号", "TLS", "数据中心", "IP位置",
+			"地区", "城市", "地区(中文)", "落地IP位置", "城市(中文)", "国旗",
 			"网络延迟",
-			"出站IP", "IP类型",
+			"出站IP", "出站IP类型", "IPS类型",
 			"ASN号码", "ASN组织",
 			"访问协议", "TLS版本", "SNI", "HTTP版本",
 			"WARP", "Gateway", "RBI", "密钥交换", "时间戳",
@@ -521,6 +532,7 @@ func main() {
 				fmt.Sprintf("%.0f kB/s", res.downloadSpeed),
 				res.result.outboundIP,
 				res.result.ipType,
+				res.result.ipsType,
 				strconv.FormatUint(uint64(res.result.autonomousSystemNumber), 10),
 				res.result.autonomousSystemOrganization,
 				res.result.visitScheme,
@@ -549,6 +561,7 @@ func main() {
 				res.result.latency,
 				res.result.outboundIP,
 				res.result.ipType,
+				res.result.ipsType,
 				strconv.FormatUint(uint64(res.result.autonomousSystemNumber), 10),
 				res.result.autonomousSystemOrganization,
 				res.result.visitScheme,
@@ -698,4 +711,29 @@ func getIPType(ip string) string {
 		return "IPv4"
 	}
 	return "IPv6"
+}
+func queryIPAPI(ip string) string {
+	url := "https://api.ipapi.is/?ip=" + ip
+
+	client := http.Client{
+		Timeout: 2 * time.Second,
+	}
+
+	resp, err := client.Get(url)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+
+	var data ipapiResponse
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		return ""
+	}
+
+	// 核心判断
+	if data.ASN.Type == "isp" {
+		return "✅家宽"
+	}
+
+	return "🟡机房"
 }
