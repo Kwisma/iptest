@@ -87,9 +87,17 @@ type location struct {
 	Emoji     string  `json:"emoji"`
 }
 type ipapiResponse struct {
+	IsDatacenter bool `json:"is_datacenter"`
+
+	Company struct {
+		Type string `json:"type"`
+	} `json:"company"`
+
 	ASN struct {
 		Type string `json:"type"`
 	} `json:"asn"`
+
+	Error string `json:"error"`
 }
 
 // 尝试提升文件描述符的上限
@@ -495,7 +503,7 @@ func main() {
 	if *speedTest > 0 {
 		writer.Write([]string{
 			"IP地址", "端口号", "TLS", "数据中心", "IP位置",
-			"地区", "城市", "地区(中文)", "落地IP位置", "城市(中文)", "国旗",
+			"地区", "城市", "地区(中文)", "出站IP位置", "城市(中文)", "国旗",
 			"网络延迟", "下载速度",
 			"出站IP", "出站IP类型", "IPS类型",
 			"ASN号码", "ASN组织",
@@ -505,7 +513,7 @@ func main() {
 	} else {
 		writer.Write([]string{
 			"IP地址", "端口号", "TLS", "数据中心", "IP位置",
-			"地区", "城市", "地区(中文)", "落地IP位置", "城市(中文)", "国旗",
+			"地区", "城市", "地区(中文)", "出站IP位置", "城市(中文)", "国旗",
 			"网络延迟",
 			"出站IP", "出站IP类型", "IPS类型",
 			"ASN号码", "ASN组织",
@@ -712,8 +720,9 @@ func getIPType(ip string) string {
 	}
 	return "IPv6"
 }
+
 func queryIPAPI(ip string) string {
-	url := "https://api.ipapi.is/?ip=" + ip
+	url := "https://api.ipapi.is/?q=" + ip
 
 	client := http.Client{
 		Timeout: 2 * time.Second,
@@ -730,10 +739,44 @@ func queryIPAPI(ip string) string {
 		return ""
 	}
 
-	// 核心判断
-	if data.ASN.Type == "isp" {
-		return "✅家宽"
+	if data.Error != "" {
+		return ""
 	}
 
-	return "🟡机房"
+	// 优先使用 is_datacenter 字段判断机房
+	if data.IsDatacenter {
+		return "🟥机房"
+	}
+
+	switch data.Company.Type {
+	case "hosting":
+		return "🟥机房"
+	case "education":
+		return "🎓教育网"
+	case "government":
+		return "🏛政府"
+	case "banking":
+		return "💰金融"
+	case "business":
+		return "🏢企业"
+	case "isp":
+		return "✅家宽"
+	default:
+		switch data.ASN.Type {
+		case "hosting":
+			return "🟥机房"
+		case "education":
+			return "🎓教育网"
+		case "government":
+			return "🏛政府"
+		case "banking":
+			return "💰金融"
+		case "business":
+			return "🏢企业"
+		case "isp":
+			return "✅家宽"
+		default:
+			return "❓未知"
+		}
+	}
 }
