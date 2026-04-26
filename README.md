@@ -51,6 +51,7 @@ go build -o iptest iptest.go
 | `-url`       | `speed.cloudflare.com/__down?bytes=500000000` | 测速文件地址（默认为 Cloudflare 大文件）。                      |
 | `-tls`       | `true`                                        | 是否启用 TLS（`true` 为 HTTPS，`false` 为 HTTP）。              |
 | `-delay`     | `0`                                           | 延迟阈值（毫秒），超过此值的 IP 将被过滤（设为 `0` 禁用过滤）。 |
+| `-ips`       | `false`                                        | 是否检测 IPS 类型（`true` 为检测，`false` 为不检测）。             |
 
 ### 示例
 
@@ -85,7 +86,7 @@ go build -o iptest iptest.go
 
 CSV 文件包含以下字段：
 
-- `IP地址`、`端口`、`TLS`、`数据中心`、`源IP位置`、`地区`、`城市`、`地区(中文)`、`国家`、`城市(中文)`、`国旗`、`网络延迟`、`下载速度`（若启用测速）。
+- `IP地址`、`端口号`、`TLS`、`数据中心`、`IP位置`、`地区`、`城市`、`地区(中文)`、`出站IP位置`、`城市(中文)`、`国旗`、`网络延迟`、`下载速度`（若启用测速）、`出站IP`、`出站IP类型`、`IPS类型`、`ASN号码`、`ASN组织`、`访问协议`、`TLS版本`、`SNI`、`HTTP版本`、`WARP`、`Gateway`、`RBI`、`密钥交换`、`时间戳`
 
 ## 注意事项
 
@@ -145,6 +146,7 @@ node ip_init.js
 - `speedtest` 默认并发 `5` 下载测速协程数量,设为0禁用测速
 - `url` 默认测速地址 `speed.cloudflare.com/__down?bytes=500000000` 测速文件地址
 - `tls` 默认参数 `true` 是否启用TLS
+- `ips` 默认参数 `false` 是否检测 IPS 类型
 
 ```bash
 go run iptest.go -file ip_tq.txt -outfile ip_tq.csv
@@ -154,36 +156,4 @@ go run iptest.go -file ip_tq.txt -outfile ip_tq.csv
 
 ```bash
 node ip_tq.js
-```
-
-## 格式转换
-
-多个/单个 XLSX 转 CSV
-
-多个 CSV 合并
-
-- init.csv 为输出文件名
-
-```bash
-node csv_hb.js init.csv 文件.csv 文件2.xlsx
-```
-
-也可以指定目录合并
-
-```bash
-node csv_hb.js init.csv ./ipfofa
-```
-
-## js格式化
-
-安装工具
-
-```bash
-npm install --global prettier
-```
-
-格式化文件
-
-```bash
-prettier --write ip_init.js
 ```

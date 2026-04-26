@@ -38,6 +38,7 @@ var (
 	speedTestURL = flag.String("url", "speed.cloudflare.com/__down?bytes=500000000", "测速文件地址") // 测速文件地址
 	enableTLS    = flag.Bool("tls", true, "是否启用TLS")                                           // TLS是否启用
 	delay        = flag.Int("delay", 0, "延迟阈值(ms)，默认为0禁用延迟过滤")                                 // 默认0，禁用过滤
+	enableIPAPI  = flag.Bool("ips", false, "是否启用IPS类型检测(调用ipapi.is API)")                      // 默认不检测
 )
 
 type result struct {
@@ -370,7 +371,11 @@ func main() {
 					var asnOrg string = ""
 					var ipsType string
 					if outboundIP != "" {
-						ipsType = queryIPAPI(ipAddr)
+						if *enableIPAPI {
+							ipsType = queryIPAPI(ipAddr)
+						} else {
+							ipsType = "未检测"
+						}
 					}
 
 					if asnDB != nil {
