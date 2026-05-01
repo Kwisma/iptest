@@ -747,41 +747,21 @@ func queryIPAPI(ip string) string {
 	if data.Error != "" {
 		return ""
 	}
-
-	// 优先使用 is_datacenter 字段判断机房
-	if data.IsDatacenter {
-		return "🟥机房"
-	}
-
-	switch data.Company.Type {
-	case "hosting":
-		return "🟥机房"
-	case "education":
-		return "🎓教育网"
-	case "government":
-		return "🏛政府"
-	case "banking":
-		return "💰金融"
-	case "business":
-		return "🏢企业"
-	case "isp":
+	companyType := data.Company.Type
+	asnType := data.ASN.Type
+	if companyType == "isp" && asnType == "isp" {
 		return "✅家宽"
+	}
+	switch {
+	case companyType == "education" || asnType == "education":
+		return "🎓教育网"
+	case companyType == "government" || asnType == "government":
+		return "🏛政府"
+	case companyType == "banking" || asnType == "banking":
+		return "💰金融"
+	case companyType == "business" || asnType == "business":
+		return "🏢企业"
 	default:
-		switch data.ASN.Type {
-		case "hosting":
-			return "🟥机房"
-		case "education":
-			return "🎓教育网"
-		case "government":
-			return "🏛政府"
-		case "banking":
-			return "💰金融"
-		case "business":
-			return "🏢企业"
-		case "isp":
-			return "✅家宽"
-		default:
-			return "❓未知"
-		}
+		return "🟥机房"
 	}
 }
