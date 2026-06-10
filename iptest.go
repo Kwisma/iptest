@@ -374,7 +374,7 @@ func main() {
 						if *enableIPAPI {
 							ipsType = queryIPAPI(ipAddr)
 						} else {
-							ipsType = "未检测"
+							ipsType = "N/A"
 						}
 					}
 
@@ -747,21 +747,32 @@ func queryIPAPI(ip string) string {
 	if data.Error != "" {
 		return ""
 	}
-	companyType := data.Company.Type
-	asnType := data.ASN.Type
-	if companyType == "isp" && asnType == "isp" {
-		return "✅家宽"
+
+	// 先判断特殊网络
+	if data.IsDatacenter {
+		return "🟥机房"
 	}
+
+	companyType := strings.ToLower(data.Company.Type)
+	asnType := strings.ToLower(data.ASN.Type)
+
 	switch {
 	case companyType == "education" || asnType == "education":
 		return "🎓教育网"
+
 	case companyType == "government" || asnType == "government":
 		return "🏛政府"
+
 	case companyType == "banking" || asnType == "banking":
 		return "💰金融"
+
 	case companyType == "business" || asnType == "business":
 		return "🏢企业"
+
+	case companyType == "isp" && asnType == "isp":
+		return "✅家宽"
+
 	default:
-		return "🟥机房"
+		return "❓未知"
 	}
 }
