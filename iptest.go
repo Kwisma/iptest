@@ -56,6 +56,7 @@ type result struct {
 	tcpDuration                  time.Duration // TCP请求延迟
 	outboundIP                   string        // 出站IP
 	ipType                       string        // 出站IP类型 (IPv4/IPv6)
+	countryName                 string        // 出站 IP 位置
 	visitScheme                  string        // 访问协议
 	tlsVersion                   string        // TLS版本
 	sni                          string        // SNI
@@ -135,6 +136,29 @@ func downloadASNDatabase() error {
 	fmt.Println("GeoLite2-ASN.mmdb 下载完成")
 	return nil
 }
+
+func downloadCountryDatabase() error {
+	fmt.Println("正在下载 GeoLite2-Country.mmdb...")
+	resp, err := http.Get("https://jsd.onmicrosoft.cn/gh/seketiti/GeoLiet2@release/GeoLite2-Country.mmdb")
+	if err != nil {
+		return fmt.Errorf("下载失败: %v", err)
+	}
+	defer resp.Body.Close()
+
+	data, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("读取数据失败: %v", err)
+	}
+
+	err = ioutil.WriteFile("GeoLite2-Country.mmdb", data, 0644)
+	if err != nil {
+		return fmt.Errorf("保存文件失败: %v", err)
+	}
+
+	fmt.Println("GeoLite2-Country.mmdb 下载完成")
+	return nil
+}
+
 func main() {
 	flag.Parse()
 	var validCount int32 // 有效IP计数器
@@ -229,6 +253,22 @@ func main() {
 		locationMap[loc.Iata] = loc
 	}
 
+	var countryDB *geoip2.Reader
+
+	if _, err := os.Stat("GeoLite2-Country.mmdb"); os.IsNotExist(err) {
+		fmt.Println("Country数据库不存在，尝试下载...")
+		if err := downloadCountryDatabase(); err != nil {
+			fmt.Printf("下载Country库失败: %v\n", err)
+		}
+	}
+
+	countryDB, dbErr = geoip2.Open("GeoLite2-Country.mmdb")
+	if dbErr != nil {
+		fmt.Printf("警告: 打开Country数据库失败: %v (国家信息不可用)\n", dbErr)
+	} else {
+		defer countryDB.Close()
+		fmt.Println("Country数据库加载成功")
+	}
 	ips, err := readIPs(*File)
 	if err != nil {
 		fmt.Printf("无法从文件中读取 IP: %v\n", err)
@@ -367,6 +407,16 @@ func main() {
 					// 记录通过延迟检查的有效IP
 					atomic.AddInt32(&validCount, 1)
 					outboundIP := responseData["ip"]
+					country := ""
+					if countryDB != nil {
+						ip := net.ParseIP(outboundIP)
+						if ip != nil {
+							record, err := countryDB.Country(ip)
+							if err == nil && record.Country.Names["zh-CN"] != "" {
+								country = record.Country.Names["zh-CN"]
+							}
+						}
+					}
 					var asn uint = 0
 					var asnOrg string = ""
 					var ipsType string
@@ -400,6 +450,7 @@ func main() {
 						tcpDuration:                  tcpDuration,
 						outboundIP:                   outboundIP,
 						ipType:                       ipType,
+						countryName:                  country,
 						visitScheme:                  responseData["visit_scheme"],
 						tlsVersion:                   responseData["tls"],
 						sni:                          responseData["sni"],
@@ -508,9 +559,9 @@ func main() {
 	if *speedTest > 0 {
 		writer.Write([]string{
 			"IP地址", "端口号", "TLS", "数据中心", "IP位置",
-			"地区", "城市", "地区(中文)", "出站IP位置", "城市(中文)", "国旗",
+			"地区", "城市", "地区(中文)", "国家", "城市(中文)", "国旗",
 			"网络延迟", "下载速度",
-			"出站IP", "出站IP类型", "IPS类型",
+			"出站IP", "出站IP类型", "出站IP位置", "IPS类型",
 			"ASN号码", "ASN组织",
 			"访问协议", "TLS版本", "SNI", "HTTP版本",
 			"WARP", "Gateway", "RBI", "密钥交换", "时间戳",
@@ -518,9 +569,9 @@ func main() {
 	} else {
 		writer.Write([]string{
 			"IP地址", "端口号", "TLS", "数据中心", "IP位置",
-			"地区", "城市", "地区(中文)", "出站IP位置", "城市(中文)", "国旗",
+			"地区", "城市", "地区(中文)", "国家", "城市(中文)", "国旗",
 			"网络延迟",
-			"出站IP", "出站IP类型", "IPS类型",
+			"出站IP", "出站IP类型", "出站IP位置", "IPS类型",
 			"ASN号码", "ASN组织",
 			"访问协议", "TLS版本", "SNI", "HTTP版本",
 			"WARP", "Gateway", "RBI", "密钥交换", "时间戳",
@@ -545,6 +596,7 @@ func main() {
 				fmt.Sprintf("%.0f kB/s", res.downloadSpeed),
 				res.result.outboundIP,
 				res.result.ipType,
+				res.result.countryName,
 				res.result.ipsType,
 				strconv.FormatUint(uint64(res.result.autonomousSystemNumber), 10),
 				res.result.autonomousSystemOrganization,
@@ -574,6 +626,7 @@ func main() {
 				res.result.latency,
 				res.result.outboundIP,
 				res.result.ipType,
+				res.result.countryName,
 				res.result.ipsType,
 				strconv.FormatUint(uint64(res.result.autonomousSystemNumber), 10),
 				res.result.autonomousSystemOrganization,
@@ -748,11 +801,6 @@ func queryIPAPI(ip string) string {
 		return ""
 	}
 
-	// 先判断特殊网络
-	if data.IsDatacenter {
-		return "🟥机房"
-	}
-
 	companyType := strings.ToLower(data.Company.Type)
 	asnType := strings.ToLower(data.ASN.Type)
 
@@ -773,6 +821,6 @@ func queryIPAPI(ip string) string {
 		return "✅家宽"
 
 	default:
-		return "❓未知"
+		return "🟥机房"
 	}
 }
